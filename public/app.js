@@ -823,7 +823,8 @@ on(/^#\/signup(?:\?.*)?$/, async () => {
 });
 
 /* ============================================================ account */
-const isUpcoming = (b) => b.status === 'confirmed' && `${b.date} ${b.time}` >= `${today()} ${new Date().toTimeString().slice(0, 5)}`;
+const isUpcoming = (b) =>
+  b.status === 'confirmed' && (b.date > today() || (b.date === today() && b.start_min > (state.config.now_min ?? 0)));
 
 on(/^#\/account(?:\/(profile|past))?$/, async (tab = 'upcoming') => {
   const u = state.user;
@@ -981,7 +982,11 @@ on(/^#\/admin\/?$/, async () => {
   const body = adminShell('', 'Overview', `<button class="btn btn-md" id="newBk">New booking</button>`);
   $('#newBk').addEventListener('click', () => staffBookingModal(() => render()));
   const s = await api('/api/admin/stats');
-  body.innerHTML = `
+  const myTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const tzBanner = state.config.timezone === 'UTC' && myTz && myTz !== 'UTC'
+    ? `<div class="card flat row" style="margin-bottom:16px;border-color:var(--warn)"><span style="flex:1">The salon’s time zone is set to <strong>UTC</strong>. Use <strong>${esc(myTz)}</strong> so “today” and slot times match your clock?</span>
+       <button class="btn btn-sm" id="tzFix">Use ${esc(myTz)}</button></div>` : '';
+  body.innerHTML = tzBanner + `
     <div class="grid grid-4">
       ${[['Today', s.today_bookings, 'appointments'], ['Upcoming', s.upcoming, 'confirmed bookings'],
          ['This month', money(s.month_revenue), 'booked revenue'], ['Customers', s.customers, `${s.cancel_rate}% cancel rate (30d)`]]
@@ -1004,6 +1009,14 @@ on(/^#\/admin\/?$/, async () => {
           <div class="small muted">${esc(b.service_name)} · ${esc(b.stylist_name)} · until ${fmtTime(b.end_time)}</div></div>${badge(b.status)}</div></div>`).join('')
         : '<p class="muted">No appointments today.</p>'}</div>
     </div>`;
+  $('#tzFix')?.addEventListener('click', async () => {
+    try {
+      await api('/api/admin/settings', { method: 'PUT', body: { timezone: myTz } });
+      state.config = await api('/api/config');
+      toast(`Time zone set to ${myTz}`);
+      render();
+    } catch (e) { toastError(e); }
+  });
   if (matchMedia('(max-width: 900px)').matches) $('#ovRow').style.gridTemplateColumns = '1fr';
   let asTable = false;
   let range = 'ahead';
@@ -1372,8 +1385,12 @@ on(/^#\/admin\/settings$/, async () => {
     <form id="setForm" class="grid" style="gap:16px;max-width:820px">
       <div class="card"><h3 style="font-size:19px;margin-bottom:16px">Salon</h3>
         <div class="grid grid-2" style="gap:0 16px">
-          ${[['salon_name', 'Name'], ['tagline', 'Tagline'], ['address', 'Address'], ['phone', 'Phone'], ['email', 'Email'], ['currency', 'Currency (ISO code)']]
+          ${[['salon_name', 'Name'], ['tagline', 'Tagline'], ['address', 'Address'], ['phone', 'Phone'], ['email', 'Email'], ['currency', 'Currency (ISO code, e.g. USD, INR, EUR)']]
             .map(([k, l]) => `<label class="field"><span>${l}</span><input class="input input-sm" name="${k}" value="${esc(s[k])}"></label>`).join('')}
+          <label class="field"><span>Time zone (used for “today” and slot times)</span>
+            <span class="row" style="flex-wrap:nowrap;gap:8px"><input class="input input-sm" name="timezone" id="tzIn" value="${esc(s.timezone)}" list="tzList">
+            <button type="button" class="btn gray btn-sm" id="tzMine">Use mine</button></span></label>
+          <datalist id="tzList">${(Intl.supportedValuesOf?.('timeZone') || []).map((z) => `<option value="${z}">`).join('')}</datalist>
         </div></div>
       <div class="card"><h3 style="font-size:19px;margin-bottom:8px">Opening hours</h3>
         ${[1, 2, 3, 4, 5, 6, 0].map((d) => {
@@ -1401,6 +1418,7 @@ on(/^#\/admin\/settings$/, async () => {
     $$('[data-rm]').forEach((b) => b.addEventListener('click', () => { closed = closed.filter((x) => x !== b.dataset.rm); drawClosed(); }));
   };
   drawClosed();
+  $('#tzMine').addEventListener('click', () => ($('#tzIn').value = Intl.DateTimeFormat().resolvedOptions().timeZone));
   $('#cdAdd').addEventListener('click', () => {
     const v = $('#cdNew').value;
     if (v && !closed.includes(v)) { closed.push(v); closed.sort(); drawClosed(); }

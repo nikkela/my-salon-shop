@@ -2,15 +2,18 @@
 
 A complete salon website: customer accounts, **one-click sign in**, real-time slot booking, and an admin console. The design is inspired by Apple's style: system fonts, lots of white space, frosted navigation, rounded cards and automatic dark mode.
 
-No framework, no build step and **no dependencies**. It runs on Node.js 22.5+ with its built-in SQLite.
+**Live:** https://my-salon-shop.kelanikunj72.workers.dev
 
-## Quick start
+Runs on **Cloudflare Workers** with a **D1** database (Cloudflare's hosted SQLite). There's no front-end framework or build step; the static files are embedded into the Worker.
+
+## Quick start (local)
 
 ```bash
-npm start
+npm install
+npm run dev
 ```
 
-Open http://localhost:3000. The database (`data/salon.db`) is created and filled with demo data on first run.
+Open http://localhost:8787. This uses a local D1 database, and the demo data loads automatically on first run.
 
 | Account  | Email               | Password   |
 |----------|---------------------|------------|
@@ -18,6 +21,15 @@ Open http://localhost:3000. The database (`data/salon.db`) is created and filled
 | Admin    | `admin@salon.local` | `admin123` |
 
 You don't need either password: the sign-in page has **One-click sign in** (customer) and **Salon staff (admin)** buttons. The last booking step also has an inline one-click button, so a guest can go from choosing a service to a confirmed booking without filling in any form.
+
+## Deploy
+
+```bash
+npx wrangler login
+npm run deploy
+```
+
+`npm run deploy` embeds `public/`, applies database migrations to the remote D1 database `salon-db` (its ID is in `wrangler.jsonc`) and deploys the Worker.
 
 ## Features
 
@@ -44,30 +56,28 @@ You don't need either password: the sign-in page has **One-click sign in** (cust
 
 **Booking rules on the server**
 - Slots are worked out from opening hours, service length, the stylist's specialties and existing bookings, so the same stylist can never be double-booked
-- Every booking is checked again when it's saved. If two people pick the same slot, the second gets a friendly "just taken" message
+- Every booking is checked again, atomically, when it's saved. If two people pick the same slot, the second gets a friendly "just taken" message
 - There's a 30-minute minimum lead time for same-day bookings, and changes are blocked inside the cut-off window
 
 ## Configuration
 
-| Variable      | Default  | Purpose |
-|---------------|----------|---------|
-| `PORT`        | `3000`   | HTTP port |
-| `DATA_DIR`    | `./data` | Where the SQLite database is stored |
-| `QUICK_LOGIN` | enabled  | Set to `false` to turn off one-click / bypass sign in |
-| `NODE_ENV`    | –        | Set to `production` to mark session cookies `Secure` (HTTPS) |
+| Setting | Where | Purpose |
+|---------|-------|---------|
+| `QUICK_LOGIN` | `vars` in `wrangler.jsonc` (or Worker settings in the dashboard) | `"true"` = one-click / bypass sign in. Set to `"false"` before going live |
+| Time zone | Admin → Settings | Controls "today" and slot times. Admins see a banner offering their device's time zone until one is set |
+| Currency, hours, holidays, rules | Admin → Settings | Salon details and booking rules |
 
-> ⚠️ **One-click sign in skips passwords** and signs anyone in as the demo customer or the **admin**. It's useful for demos and testing. Run with `QUICK_LOGIN=false` before going live.
-
-Start again with fresh demo data: delete `data/salon.db` and restart.
+> ⚠️ **One-click sign in skips passwords** and signs anyone in as the demo customer or the **admin**. Switch it off and change the admin password before real customers use the site.
 
 ## Project layout
 
 ```
-server/
-  index.js   HTTP server, REST API, static files
-  db.js      SQLite schema, settings, demo seed data
-  slots.js   availability / slot engine
-  auth.js    scrypt password hashing, session tokens
+src/
+  worker.js  Cloudflare Worker: REST API, settings, demo seed, static files
+  slots.js   availability / slot engine (time-zone aware)
+  auth.js    PBKDF2 password hashing, session tokens
+migrations/  D1 schema
+scripts/     embed.mjs — bundles public/ into the Worker
 public/
   index.html app shell
   styles.css design system (light + dark)
@@ -76,6 +86,6 @@ public/
 
 ## Security notes
 
-- Passwords are hashed with scrypt and per-user salts. Sessions use random tokens in `HttpOnly`, `SameSite=Lax` cookies
+- Passwords are hashed with PBKDF2-SHA256 (100k iterations) and per-user salts. Sessions use random tokens in `HttpOnly`, `SameSite=Lax` cookies
 - API calls that change data must be sent as JSON, which blocks cross-site form posts
 - Sign-in and sign-up are rate-limited per IP. Admin endpoints check the user's role on the server

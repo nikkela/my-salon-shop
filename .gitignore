@@ -1,3 +1,7 @@
 node_modules/
 data/
+dist/
+.wrangler/
+.dev.vars
 .env
+src/static.gen.js
