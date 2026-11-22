@@ -393,10 +393,16 @@ textarea.input { height: auto; min-height: 88px; padding: 12px 16px; resize: ver
 .admin-main .head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
 .admin-main .head h1 { font-size: 34px; flex: 1; }
 @media (max-width: 860px) {
-  .admin { grid-template-columns: 1fr; }
+  .admin { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; align-content: start; }
+  .admin-main { min-width: 0; max-width: 100vw; overflow-x: clip; }
   .admin-side { display: flex; gap: 4px; overflow-x: auto; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--line-soft); position: sticky; top: 52px; z-index: 5; }
   .admin-side .lbl { display: none; }
-  .admin-side a { white-space: nowrap; font-size: 14px; }
+  .admin-side { align-items: center; min-width: 0; scrollbar-width: none; }
+  .admin-side::-webkit-scrollbar { display: none; }
+  .admin-side a { flex: none; white-space: nowrap; font-size: 14px; padding: 7px 14px; border-radius: 980px; line-height: 1.2; }
+  .admin-main .head { flex-wrap: nowrap; }
+  .admin-main .head h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .admin-main .head .btn { flex: none; }
 }
 
 .stat .k { font-size: 13px; color: var(--text-2); }
@@ -608,3 +614,10 @@ body.menu-open .wa-fab { display: none; }
 .opt .icon-btn { font-size: 13px; padding: 4px 8px; }
 .opt .icon-btn:disabled { opacity: .3; cursor: default; }
 select.input-sm, select.input { appearance: auto; }
+
+.hero-quote {
+  max-width: 640px; margin: 18px auto 0; padding: 0 16px;
+  font-size: clamp(17px, 2.2vw, 21px); font-style: italic; font-weight: 500; line-height: 1.35;
+  background: linear-gradient(90deg, #ff7a59, #d14bff 55%, #3f7bff);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}

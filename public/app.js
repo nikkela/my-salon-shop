@@ -247,9 +247,11 @@ async function render() {
     if (r.guard === 'staff' && !isStaffUser()) return go(homeFor(state.user));
     if (r.guard === 'admin' && !isAdmin()) return go(homeFor(state.user));
     if (isStaffUser() && !state.options) await loadOptions();
-    window.scrollTo(0, 0);
+    const top = () => window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    top();
     try {
       await r.fn(...m.slice(1));
+      top();
     } catch (e) {
       console.error(e);
       app.innerHTML = `<div class="wrap empty" style="padding:120px 0"><div class="big">⚠️</div><h2>Something went wrong</h2><p class="muted">${esc(e.message)}</p></div>`;
@@ -259,6 +261,12 @@ async function render() {
   app.innerHTML = `<section class="wrap center" style="padding:140px 0"><h1 class="headline">Page not found.</h1><p class="subhead">The page you’re looking for can’t be found.</p><div class="hero-ctas"><a class="btn" href="#/">Go home</a></div></section>`;
 }
 window.addEventListener('hashchange', render);
+// A link to the page you're already on fires no hashchange: re-render it and jump to the top.
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[href^="#/"]');
+  if (!a || e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || a.target === '_blank') return;
+  if (a.getAttribute('href') === (location.hash || '#/')) { e.preventDefault(); render(); }
+});
 const queryParam = (k) => new URLSearchParams((location.hash.split('?')[1] || '')).get(k);
 
 /* ================================================================ home */
@@ -292,6 +300,7 @@ on(/^#\/?$/, async () => {
       <p class="eyebrow">New · Online booking</p>
       <h1 class="display" style="margin-top:8px">${esc(c.salon_name.split(' ')[0])}<span class="gradient-text">.</span></h1>
       <p class="subhead">${esc(c.tagline)} Booked in seconds.</p>
+      ${c.quote ? `<p class="hero-quote">“${esc(c.quote)}”</p>` : ''}
       <div class="hero-ctas">
         <a class="btn" href="#/book">Book an appointment</a>
         <a class="btn secondary" href="#/services">Explore services</a>
@@ -1535,7 +1544,7 @@ on(/^#\/admin\/settings$/, async () => {
     <form id="setForm" class="grid" style="gap:16px;max-width:820px">
       <div class="card"><h3 style="font-size:19px;margin-bottom:16px">Salon</h3>
         <div class="grid grid-2" style="gap:0 16px">
-          ${[['salon_name', 'Name'], ['tagline', 'Tagline'], ['address', 'Address'], ['phone', 'Phone'], ['whatsapp', 'WhatsApp number'], ['email', 'Email'], ['instagram', 'Instagram handle (optional)'], ['map_url', 'Google Maps link (optional)'], ['currency', 'Currency (ISO code, e.g. USD, INR, EUR)']]
+          ${[['salon_name', 'Name'], ['tagline', 'Tagline'], ['quote', 'Home page quote'], ['address', 'Address'], ['phone', 'Phone'], ['whatsapp', 'WhatsApp number'], ['email', 'Email'], ['instagram', 'Instagram handle (optional)'], ['map_url', 'Google Maps link (optional)'], ['currency', 'Currency (ISO code, e.g. USD, INR, EUR)']]
             .map(([k, l]) => `<label class="field"><span>${l}</span><input class="input input-sm" name="${k}" value="${esc(s[k])}"></label>`).join('')}
           <label class="field"><span>Time zone (used for “today” and slot times)</span>
             <span class="row" style="flex-wrap:nowrap;gap:8px"><input class="input input-sm" name="timezone" id="tzIn" value="${esc(s.timezone)}" list="tzList">

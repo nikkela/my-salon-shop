@@ -217,7 +217,7 @@ const ST = { auth: true, staff: true };
 /* ---------- public */
 route('GET', '/api/config', async (ctx) => {
   const s = await ctx.settings();
-  const pick = ['salon_name', 'tagline', 'address', 'phone', 'whatsapp', 'instagram', 'map_url', 'email', 'currency', 'timezone', 'hours', 'closed_dates', 'max_days_ahead', 'cancel_cutoff_hours'];
+  const pick = ['salon_name', 'tagline', 'quote', 'address', 'phone', 'whatsapp', 'instagram', 'map_url', 'email', 'currency', 'timezone', 'hours', 'closed_dates', 'max_days_ahead', 'cancel_cutoff_hours'];
   const now = S.nowLocal(s.timezone);
   return { ...Object.fromEntries(pick.map((k) => [k, s[k]])), category_order: (await getOptions(ctx.db)).category, quick_login: ctx.quickLogin, today: now.date, now_min: now.min };
 });
@@ -683,7 +683,7 @@ route('DELETE', '/api/admin/staff/:id', A, async ({ params, db, user }) => {
 route('GET', '/api/admin/settings', A, (ctx) => ctx.settings());
 route('PUT', '/api/admin/settings', A, async ({ body, db }) => {
   const patch = {};
-  for (const k of ['salon_name', 'tagline', 'address', 'phone', 'email', 'currency', 'instagram', 'map_url']) if (k in body) patch[k] = str(body[k], 200);
+  for (const k of ['salon_name', 'tagline', 'quote', 'address', 'phone', 'email', 'currency', 'instagram', 'map_url']) if (k in body) patch[k] = str(body[k], 200);
   if ('whatsapp' in body) {
     if (body.whatsapp && !indianMobile(body.whatsapp)) throw bad('WhatsApp must be a valid 10-digit mobile number.');
     patch.whatsapp = body.whatsapp ? indianMobile(body.whatsapp) : '';

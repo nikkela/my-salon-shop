@@ -3,6 +3,7 @@
 export const DEFAULT_SETTINGS = {
   salon_name: 'Saundarya Salon & Spa',
   tagline: 'Hair. Skin. Glow.',
+  quote: 'Walk in as you are, walk out feeling your most beautiful.',
   address: '12, Sunrise Complex, CG Road, Navrangpura, Ahmedabad, Gujarat 380009',
   phone: '+91 95719 30793',
   whatsapp: '+91 95719 30793',
