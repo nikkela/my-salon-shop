@@ -52,6 +52,7 @@ async function checkOption(db, list, value, required = false) {
 }
 
 /* ---------------------------------------------------------------- settings */
+const LOGO_COLORS = ['rose', 'maroon', 'gold', 'plum', 'teal', 'mono'];
 async function getSettings(db) {
   const { results } = await db.prepare('SELECT key, value FROM settings').all();
   const out = { ...DEFAULT_SETTINGS };
@@ -217,7 +218,7 @@ const ST = { auth: true, staff: true };
 /* ---------- public */
 route('GET', '/api/config', async (ctx) => {
   const s = await ctx.settings();
-  const pick = ['salon_name', 'tagline', 'quote', 'address', 'phone', 'whatsapp', 'instagram', 'map_url', 'email', 'currency', 'timezone', 'hours', 'closed_dates', 'max_days_ahead', 'cancel_cutoff_hours'];
+  const pick = ['salon_name', 'tagline', 'quote', 'logo', 'logo_color', 'logo_show_name', 'address', 'phone', 'whatsapp', 'instagram', 'map_url', 'email', 'currency', 'timezone', 'hours', 'closed_dates', 'max_days_ahead', 'cancel_cutoff_hours'];
   const now = S.nowLocal(s.timezone);
   return { ...Object.fromEntries(pick.map((k) => [k, s[k]])), category_order: (await getOptions(ctx.db)).category, quick_login: ctx.quickLogin, today: now.date, now_min: now.min };
 });
@@ -684,6 +685,17 @@ route('GET', '/api/admin/settings', A, (ctx) => ctx.settings());
 route('PUT', '/api/admin/settings', A, async ({ body, db }) => {
   const patch = {};
   for (const k of ['salon_name', 'tagline', 'quote', 'address', 'phone', 'email', 'currency', 'instagram', 'map_url']) if (k in body) patch[k] = str(body[k], 200);
+  if ('logo' in body) {
+    const v = String(body.logo || '');
+    if (v && !/^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(v)) throw bad('Logo must be a PNG, JPG, WebP or SVG image.');
+    if (v.length > 280000) throw bad('Logo is too large. Please use an image under 200 KB.');
+    patch.logo = v;
+  }
+  if ('logo_color' in body) {
+    if (!LOGO_COLORS.includes(body.logo_color)) throw bad('Unknown logo colour.');
+    patch.logo_color = body.logo_color;
+  }
+  if ('logo_show_name' in body) patch.logo_show_name = !!body.logo_show_name && body.logo_show_name !== 'false';
   if ('whatsapp' in body) {
     if (body.whatsapp && !indianMobile(body.whatsapp)) throw bad('WhatsApp must be a valid 10-digit mobile number.');
     patch.whatsapp = body.whatsapp ? indianMobile(body.whatsapp) : '';

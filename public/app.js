@@ -298,7 +298,7 @@ on(/^#\/?$/, async () => {
   app.innerHTML = `
     <section class="hero reveal">
       <p class="eyebrow">New · Online booking</p>
-      <h1 class="display" style="margin-top:8px">${esc(c.salon_name.split(' ')[0])}<span class="gradient-text">.</span></h1>
+      <h1 class="display" style="margin-top:8px">${esc(c.salon_name.split(' ')[0])}</h1>
       <p class="subhead">${esc(c.tagline)} Booked in seconds.</p>
       ${c.quote ? `<p class="hero-quote">“${esc(c.quote)}”</p>` : ''}
       <div class="hero-ctas">
@@ -324,7 +324,7 @@ on(/^#\/?$/, async () => {
 
     <section class="section alt">
       <div class="wrap">
-        <div class="section-head"><h2 class="headline">Why ${esc(c.salon_name.split(' ')[0])}.</h2>
+        <div class="section-head"><h2 class="headline">Why ${esc(c.salon_name.split(' ')[0])}?</h2>
           <p class="subhead">Everything about your visit, designed to feel effortless.</p></div>
         <div class="features">
           ${[
@@ -1312,11 +1312,13 @@ async function staffBookingModal(done) {
 on(/^#\/admin\/schedule(?:\?.*)?$/, async () => {
   const date = queryParam('date') || today();
   const body = adminShell('schedule', 'Schedule', `
-    <button class="icon-btn" id="prevD" aria-label="Previous day">${ICON.left}</button>
-    <input class="input input-sm" type="date" id="pickD" value="${date}" style="width:auto">
-    <button class="icon-btn" id="nextD" aria-label="Next day">${ICON.right}</button>
-    <button class="btn gray btn-sm" id="todayD">Today</button>
-    <button class="btn btn-md" id="newBk">New booking</button>`);
+    <button class="btn btn-md" id="newBk">New booking</button>
+    <span class="date-nav">
+      <button class="icon-btn" id="prevD" aria-label="Previous day">${ICON.left}</button>
+      <input class="input input-sm" type="date" id="pickD" value="${date}">
+      <button class="icon-btn" id="nextD" aria-label="Next day">${ICON.right}</button>
+      <button class="btn gray btn-sm" id="todayD">Today</button>
+    </span>`);
   const goDate = (d) => go(`#/admin/schedule?date=${d}`);
   $('#prevD').addEventListener('click', () => goDate(addDays(date, -1)));
   $('#nextD').addEventListener('click', () => goDate(addDays(date, 1)));
@@ -1336,24 +1338,34 @@ on(/^#\/admin\/schedule(?:\?.*)?$/, async () => {
   const endH = Math.ceil(Math.max(close, ...live.map((b) => b.end_min)) / 60) * 60;
   const PX = 1.4;
   const height = (endH - startH) * PX;
+  // Phones get one screen-wide board: every stylist squeezed to fit, or just the one picked below.
+  const phone = window.matchMedia('(max-width: 700px)').matches;
+  if (!active.some((s) => String(s.id) === schedStylist)) schedStylist = '';
+  const cols = schedStylist ? active.filter((s) => String(s.id) === schedStylist) : active;
+  const gridCols = phone
+    ? `grid-template-columns:44px repeat(${cols.length}, minmax(0,1fr))`
+    : `grid-template-columns:64px repeat(${cols.length}, minmax(150px,1fr));min-width:${64 + cols.length * 150}px`;
 
   body.innerHTML = `
-    <p class="muted" style="margin-bottom:16px">${fmtDate(date)} · ${h ? `Open ${fmtTime(h.open)} – ${fmtTime(h.close)}` : '<strong>Closed</strong>'} · ${live.length} appointment${live.length === 1 ? '' : 's'}</p>
-    <div style="overflow-x:auto"><div class="day-board" style="grid-template-columns:64px repeat(${active.length}, minmax(150px,1fr));min-width:${64 + active.length * 150}px">
+    <div class="sched-bar"><p class="muted">${fmtDate(date)} · ${h ? `Open ${fmtTime(h.open)} – ${fmtTime(h.close)}` : '<strong>Closed</strong>'} · ${live.length} appointment${live.length === 1 ? '' : 's'}</p>
+      ${active.length > 1 ? selectHTML('schedSty', [{ value: '', label: 'All stylists' }, ...active.map((s) => ({ value: s.id, label: s.name }))], { value: schedStylist }) : ''}</div>
+    <div class="${phone ? '' : 'board-scroll'}"><div class="day-board ${phone ? 'compact' : ''}" style="${gridCols}">
       <div class="col-head"></div>
-      ${active.map((s) => `<div class="col-head">${esc(s.name)}</div>`).join('')}
+      ${cols.map((s) => `<div class="col-head">${esc(phone && cols.length > 1 ? s.name.split(' ')[0] : s.name)}</div>`).join('')}
       <div class="gutter" style="height:${height}px">
         ${[...Array((endH - startH) / 60 + 1)].map((_, i) => `<div class="hr" style="top:${i * 60 * PX}px;border:0"><span>${fmtTime(`${pad(startH / 60 + i)}:00`)}</span></div>`).join('')}
       </div>
-      ${active.map((s) => `<div class="col" style="height:${height}px">
+      ${cols.map((s) => `<div class="col" style="height:${height}px">
         ${[...Array((endH - startH) / 60)].map((_, i) => `<div class="hr" style="top:${i * 60 * PX}px"></div>`).join('')}
         ${live.filter((b) => b.stylist_id === s.id).map((b) => `
           <div class="appt ${b.status}" data-bid="${b.id}" style="top:${(b.start_min - startH) * PX}px;height:${(b.end_min - b.start_min) * PX - 2}px">
             <strong>${esc(b.customer_name)}</strong>${fmtTime(b.time)} · ${esc(b.service_name)}</div>`).join('')}
       </div>`).join('')}
     </div></div>`;
+  $('#schedSty')?.addEventListener('change', (e) => { schedStylist = e.target.value; render(); });
   $$('[data-bid]', body).forEach((el) => el.addEventListener('click', () => bookingDetail(live.find((b) => b.id === Number(el.dataset.bid)), () => render())));
 });
+let schedStylist = '';
 
 /* ---- bookings table */
 on(/^#\/admin\/bookings$/, async () => {
@@ -1542,6 +1554,18 @@ on(/^#\/admin\/settings$/, async () => {
   let closed = [...s.closed_dates];
   body.innerHTML = `
     <form id="setForm" class="grid" style="gap:16px;max-width:820px">
+      <div class="card"><h3 style="font-size:19px;margin-bottom:12px">Logo</h3>
+        <div class="logo-preview" id="logoPrev"></div>
+        <div id="logoColors"><span class="small muted">Colour of the built-in logo</span>
+          <div class="swatches">${Object.entries(LOGO_PALETTES).map(([k, [name, a, b, c]]) =>
+            `<label title="${name}"><input type="radio" name="logo_color" value="${k}" ${k === (s.logo_color || 'rose') ? 'checked' : ''} aria-label="${name}"><i style="background:linear-gradient(135deg,${a},${b} 55%,${c})"></i></label>`).join('')}</div></div>
+        <label class="row" style="gap:10px;margin-bottom:14px;flex-wrap:nowrap" id="logoNameRow"><span class="switch"><input type="checkbox" id="logoShowName" ${s.logo_show_name !== false ? 'checked' : ''}><i></i></span><span>Show salon name next to your logo</span></label>
+        <div class="row" style="gap:8px">
+          <label class="btn gray btn-sm" style="cursor:pointer">Upload your own logo<input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden></label>
+          <button type="button" class="btn gray btn-sm" id="logoRemove">Use built-in logo</button>
+        </div>
+        <p class="small muted" style="margin-top:8px">PNG, JPG, WebP or SVG up to 200 KB. A square image with a transparent background looks best. Changes apply when you save.</p>
+      </div>
       <div class="card"><h3 style="font-size:19px;margin-bottom:16px">Salon</h3>
         <div class="grid grid-2" style="gap:0 16px">
           ${[['salon_name', 'Name'], ['tagline', 'Tagline'], ['quote', 'Home page quote'], ['address', 'Address'], ['phone', 'Phone'], ['whatsapp', 'WhatsApp number'], ['email', 'Email'], ['instagram', 'Instagram handle (optional)'], ['map_url', 'Google Maps link (optional)'], ['currency', 'Currency (ISO code, e.g. USD, INR, EUR)']]
@@ -1577,6 +1601,28 @@ on(/^#\/admin\/settings$/, async () => {
     $$('[data-rm]').forEach((b) => b.addEventListener('click', () => { closed = closed.filter((x) => x !== b.dataset.rm); drawClosed(); }));
   };
   drawClosed();
+  const logo = { logo: s.logo || '', logo_color: s.logo_color || 'rose', logo_show_name: s.logo_show_name !== false };
+  const drawLogo = () => {
+    $('#logoPrev').innerHTML = brandInner({ ...logo, salon_name: $('[name=salon_name]').value || s.salon_name });
+    $('#logoColors').classList.toggle('hidden', !!logo.logo);
+    $('#logoNameRow').classList.toggle('hidden', !logo.logo);
+    $('#logoRemove').classList.toggle('hidden', !logo.logo);
+  };
+  drawLogo();
+  $$('[name=logo_color]').forEach((r) => r.addEventListener('change', () => { logo.logo_color = r.value; drawLogo(); }));
+  $('#logoShowName').addEventListener('change', (e) => { logo.logo_show_name = e.target.checked; drawLogo(); });
+  $('[name=salon_name]').addEventListener('input', drawLogo);
+  $('#logoRemove').addEventListener('click', () => { logo.logo = ''; drawLogo(); });
+  $('#logoFile').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    if (!/^image\/(png|jpeg|webp|svg\+xml)$/.test(f.type)) return toast('Please choose a PNG, JPG, WebP or SVG image.');
+    if (f.size > 200 * 1024) return toast('That image is over 200 KB. Please use a smaller file.');
+    const rd = new FileReader();
+    rd.onload = () => { logo.logo = rd.result; drawLogo(); };
+    rd.readAsDataURL(f);
+  });
   $('#tzMine').addEventListener('click', () => ($('#tzIn').value = Intl.DateTimeFormat().resolvedOptions().timeZone));
   $('#cdAdd').addEventListener('click', () => {
     const v = $('#cdNew').value;
@@ -1594,6 +1640,7 @@ on(/^#\/admin\/settings$/, async () => {
       data.hours[r.dataset.d] = $('.hOpen', r).checked ? { open: $('.hFrom', r).value, close: $('.hTo', r).value } : null;
     });
     data.closed_dates = closed;
+    Object.assign(data, logo);
     try {
       await api('/api/admin/settings', { method: 'PUT', body: data });
       state.config = await api('/api/config');
@@ -1735,9 +1782,42 @@ for (const r of routes) {
 }
 
 /* =============================================================== boot */
+/* ---- logo: built-in lotus mark in a chosen colour, or the salon's own uploaded image */
+const LOGO_PALETTES = {
+  rose: ['Rose', '#ff7a59', '#d14bff', '#3f7bff'],
+  maroon: ['Maroon', '#ff8a65', '#c2185b', '#6a0f2e'],
+  gold: ['Gold', '#f9d77e', '#d4a017', '#9a5b13'],
+  plum: ['Plum', '#e08ee8', '#9b3fb5', '#4a1a6b'],
+  teal: ['Teal', '#5ee0c8', '#12a594', '#0b5563'],
+  mono: ['Black', '#48484a', '#1d1d1f', '#000000'],
+};
+let logoSeq = 0;
+function logoSVG(color) {
+  const [, a, b, c] = LOGO_PALETTES[color] || LOGO_PALETTES.rose;
+  const id = `lg${++logoSeq}`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset=".55" stop-color="${b}"/><stop offset="1" stop-color="${c}"/></linearGradient></defs><rect width="64" height="64" rx="15" fill="url(#${id})"/><g fill="#fff"><path d="M32 12c6.5 7.6 7.4 17.6 0 29-7.4-11.4-6.5-21.4 0-29Z"/><path opacity=".9" d="M30.6 42.5C21.8 40.6 16.4 33.4 16 23.4c7.3 2.6 12.7 9.5 14.6 19.1Z"/><path opacity=".9" d="M33.4 42.5c1.9-9.6 7.3-16.5 14.6-19.1-.4 10-5.8 17.2-14.6 19.1Z"/><path opacity=".75" d="M31 44.6c-8.8 1.6-16.4-1.2-21-8 7.7-1.6 15.4.9 21 8Z"/><path opacity=".75" d="M33 44.6c5.6-7.1 13.3-9.6 21-8-4.6 6.8-12.2 9.6-21 8Z"/></g><path d="M20 50.5c8 2.6 16 2.6 24 0" stroke="#fff" stroke-width="2.4" stroke-linecap="round" fill="none" opacity=".85"/></svg>`;
+}
+function logoMark(c) {
+  return c.logo
+    ? `<span class="brand-mark custom"><img src="${esc(c.logo)}" alt=""></span>`
+    : `<span class="brand-mark">${logoSVG(c.logo_color)}</span>`;
+}
+function brandInner(c) {
+  const [first, ...rest] = String(c.salon_name || '').trim().split(/\s+/);
+  const text = !c.logo || c.logo_show_name !== false
+    ? `<span class="brand-text"><b>${esc(first)}</b>${rest.length ? `<small>${esc(rest.join(' '))}</small>` : ''}</span>`
+    : '';
+  return logoMark(c) + text;
+}
+
 function applyBranding() {
   const c = state.config;
   document.title = c.salon_name;
+  const brand = $('.nav .brand');
+  brand.innerHTML = brandInner(c);
+  brand.setAttribute('aria-label', `${c.salon_name} home`);
+  const icon = $('link[rel="icon"]');
+  if (icon) icon.href = c.logo || `data:image/svg+xml,${encodeURIComponent(logoSVG(c.logo_color))}`;
   $$('[data-salon-name]').forEach((el, i) => (el.textContent = i === 0 ? c.salon_name.split(' ')[0] : c.salon_name));
   renderFooter();
   const wa = waLink(`Hi ${c.salon_name}! I’d like to book an appointment.`);
@@ -1767,7 +1847,7 @@ function renderFooter() {
     <div class="wrap">
       <div class="footer-top">
         <div>
-          <a href="#/" class="footer-brand">${esc(c.salon_name)}</a>
+          <a href="#/" class="footer-brand" aria-label="${esc(c.salon_name)} home">${brandInner(c)}</a>
           <p>${esc(c.tagline)}</p>
           <p style="margin-top:10px">${esc(c.address)}</p>
           <span class="open-now ${st.open ? 'open' : 'closed'}">${esc(st.text)}</span>
