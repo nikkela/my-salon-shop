@@ -47,7 +47,6 @@ export const SERVICES = [
   ['Pedicure', 'Nails', 'Foot soak, scrub, massage and polish.', 60, 800],
   ['Bridal Makeup (HD)', 'Bridal', 'HD makeup, hairstyle and draping for your big day.', 180, 15000],
   ['Party / Engagement Makeup', 'Bridal', 'Makeup and hairstyle for sangeet, engagement or parties.', 90, 4000],
-  ['Bridal Mehendi', 'Bridal', 'Intricate mehendi for both hands and feet.', 180, 5000],
   ['Saree Draping', 'Bridal', 'Perfect pleats in any style — Nivi, Gujarati, Bengali and more.', 30, 500],
 ];
 
@@ -56,5 +55,5 @@ export const STYLISTS = [
   ['Priya Sharma', 'Senior Hair Stylist', '10 years of cuts, colour and keratin expertise.', 'Hair,Colour,Treatment'],
   ['Rahul Verma', 'Men’s Grooming Expert', 'Sharp fades, beard styling and relaxing champi.', 'Hair'],
   ['Anjali Nair', 'Skin & Beauty Expert', 'Facials, threading and nail care with a gentle touch.', 'Skin,Threading & Wax,Nails'],
-  ['Meera Kapoor', 'Bridal Makeup Artist', 'Bridal looks, mehendi and saree draping for every celebration.', 'Bridal,Skin,Threading & Wax'],
+  ['Meera Kapoor', 'Bridal Makeup Artist', 'Bridal and party looks, hairstyling and saree draping for every celebration.', 'Bridal,Skin,Threading & Wax'],
 ];
