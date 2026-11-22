@@ -3,12 +3,15 @@
 export const DEFAULT_SETTINGS = {
   salon_name: 'Saundarya Salon & Spa',
   tagline: 'Hair. Skin. Glow.',
-  address: '12, MG Road, Bengaluru, Karnataka 560001',
+  address: '12, Sunrise Complex, CG Road, Navrangpura, Ahmedabad, Gujarat 380009',
   phone: '+91 98765 43210',
+  whatsapp: '+91 98765 43210',
+  instagram: '',
+  map_url: '',
   email: 'hello@saundarya.example',
   currency: 'INR',
   timezone: 'Asia/Kolkata',
-  slot_interval: 15,
+  slot_interval: 25,
   cancel_cutoff_hours: 2,
   max_days_ahead: 60,
   // 0 = Sunday … 6 = Saturday. null = closed.
@@ -23,6 +26,9 @@ export const DEFAULT_SETTINGS = {
   },
   closed_dates: [],
 };
+
+// Order in which service categories are shown everywhere on the site.
+export const CATEGORY_ORDER = ['Hair', 'Threading & Wax', 'Colour', 'Bridal', 'Treatment', 'Skin', 'Nails'];
 
 // [name, category, description, duration (min), price (₹)]
 export const SERVICES = [

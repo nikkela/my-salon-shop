@@ -51,6 +51,13 @@ const avatar = (name, id = 0, size = '') => {
   const [a1, a2] = GRADIENTS[id % GRADIENTS.length];
   return `<span class="avatar ${size}" style="--a1:${a1};--a2:${a2}" aria-hidden="true">${esc(initials(name))}</span>`;
 };
+const digits = (v) => String(v || '').replace(/[^\d]/g, '');
+const waLink = (text = '') => {
+  const n = digits(state.config?.whatsapp || state.config?.phone);
+  return n ? `https://wa.me/${n}${text ? `?text=${encodeURIComponent(text)}` : ''}` : '';
+};
+const telLink = () => `tel:+${digits(state.config?.phone)}`;
+const mapLink = () => state.config?.map_url || `https://maps.google.com/?q=${encodeURIComponent(state.config?.address || '')}`;
 const statusLabel = { confirmed: 'Confirmed', completed: 'Completed', cancelled: 'Cancelled', no_show: 'No-show' };
 const badge = (s) => `<span class="badge ${s}">${statusLabel[s] || s}</span>`;
 
@@ -62,6 +69,9 @@ const ICON = {
   check: '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>',
   bolt: '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
   key: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/></svg>',
+  wa: '<svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm4.5 12.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.2-.4.7-1.4.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.4.8 3.2.7a2.8 2.8 0 0 0 1.9-1.3 2.3 2.3 0 0 0 .2-1.3c-.1-.1-.2-.2-.5-.3Z"/></svg>',
+  ig: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor"/></svg>',
+  phone: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2Z"/></svg>',
   left: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>',
   right: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>',
 };
@@ -152,6 +162,9 @@ function renderNav() {
   const u = state.user;
   const el = $('#navActions');
   document.body.classList.toggle('is-admin', location.hash.startsWith('#/admin'));
+  const navAuth = $('#navAuth');
+  navAuth.textContent = !u ? 'Sign in' : u.role === 'admin' ? 'Dashboard' : 'My bookings';
+  navAuth.setAttribute('href', !u ? '#/login' : u.role === 'admin' ? '#/admin' : '#/account');
   if (!u) {
     el.innerHTML = `<a href="#/login" class="plain">Sign in</a><a href="#/book" class="btn btn-sm">Book now</a>`;
     return;
@@ -199,6 +212,7 @@ async function render() {
   $('#burger').setAttribute('aria-expanded', 'false');
   $$('#navLinks a').forEach((a) => a.classList.toggle('active', hash.startsWith(a.getAttribute('href'))));
   document.body.classList.toggle('is-admin', hash.startsWith('#/admin'));
+  document.body.classList.toggle('no-fab', /^#\/(login|signup|book)/.test(hash));
   for (const r of routes) {
     const m = hash.match(r.re);
     if (!m) continue;
@@ -309,10 +323,11 @@ function nextOpening() {
     const dh = h[parseDate(d).getDay()];
     if (!dh || state.config.closed_dates.includes(d)) continue;
     if (i === 0) {
-      const now = new Date();
+      const now = state.config.now_min ?? 0;
       const [ch, cm] = dh.close.split(':').map(Number);
-      if (now.getHours() * 60 + now.getMinutes() + 60 > ch * 60 + cm) continue;
-      return `Today until ${fmtTime(dh.close)}`;
+      const [oh, om] = dh.open.split(':').map(Number);
+      if (now + 60 > ch * 60 + cm) continue;
+      return now < oh * 60 + om ? `Today from ${fmtTime(dh.open)}` : `Today until ${fmtTime(dh.close)}`;
     }
     return `${i === 1 ? 'Tomorrow' : fmtDate(d, { weekday: 'long' })} from ${fmtTime(dh.open)}`;
   }
@@ -405,7 +420,10 @@ on(/^#\/visit$/, async () => {
         <div class="divider"></div>
         <p><a href="tel:${esc(c.phone.replace(/[^+\d]/g, ''))}">${esc(c.phone)}</a></p>
         <p><a href="mailto:${esc(c.email)}">${esc(c.email)}</a></p>
-        <p style="margin-top:16px"><a class="link-arrow" target="_blank" rel="noopener" href="https://maps.google.com/?q=${encodeURIComponent(c.address)}">Get directions</a></p>
+        <div class="row" style="margin-top:20px">
+          <a class="btn btn-md" target="_blank" rel="noopener" href="${mapLink()}">Get directions</a>
+          ${waLink() ? `<a class="btn wa btn-md" target="_blank" rel="noopener" href="${waLink('Hi! I have a question about booking.')}">WhatsApp</a>` : ''}
+        </div>
       </div>
     </section>`;
 });
@@ -762,6 +780,7 @@ on(/^#\/login(?:\?.*)?$/, async () => {
       <form id="loginForm" novalidate>
         <label class="field"><span>Email</span><input class="input" name="email" type="email" autocomplete="email" required></label>
         <label class="field"><span>Password</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
+        <a href="#" class="forgot" id="forgotLink">Forgot password?</a>
         <p class="form-error" id="err"></p>
         <button class="btn block" type="submit">Continue</button>
       </form>
@@ -770,6 +789,17 @@ on(/^#\/login(?:\?.*)?$/, async () => {
     </div>
     <p class="center small muted" style="margin-top:16px">Demo: demo@salon.local / demo123 · admin@salon.local / admin123</p>`);
   bindQuick(next);
+  $('#forgotLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    const wa = waLink(`Hi, I forgot my password for ${state.config.salon_name}. My registered email is: `);
+    modal(`<h2>Forgot your password?</h2>
+      <p class="muted">No problem. Message us on WhatsApp or call, and we’ll set a new password for you.</p>
+      <div class="foot" style="justify-content:flex-start">
+        ${wa ? `<a class="btn wa btn-md" href="${wa}" target="_blank" rel="noopener">WhatsApp us</a>` : ''}
+        <a class="btn secondary btn-md" href="${telLink()}">Call ${esc(state.config.phone)}</a>
+        <span class="spacer"></span><button class="btn gray btn-md" data-close>Close</button>
+      </div>`);
+  });
   $('#loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -797,7 +827,7 @@ on(/^#\/signup(?:\?.*)?$/, async () => {
       <form id="signupForm" novalidate>
         <label class="field"><span>Full name</span><input class="input" name="name" autocomplete="name" required></label>
         <label class="field"><span>Email</span><input class="input" name="email" type="email" autocomplete="email" required></label>
-        <label class="field"><span>Phone (for reminders)</span><input class="input" name="phone" type="tel" autocomplete="tel"></label>
+        <label class="field"><span>Mobile number</span><input class="input" name="phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="10-digit mobile number" required></label>
         <label class="field"><span>Password</span><input class="input" name="password" type="password" autocomplete="new-password" minlength="6" required></label>
         <p class="form-error" id="err"></p>
         <button class="btn block" type="submit">Create account</button>
@@ -934,7 +964,7 @@ function drawProfile(body) {
         <h3 style="font-size:21px;margin-bottom:18px">Personal information</h3>
         <label class="field"><span>Full name</span><input class="input" name="name" value="${esc(u.name)}" required></label>
         <label class="field"><span>Email</span><input class="input" name="email" type="email" value="${esc(u.email)}" required></label>
-        <label class="field"><span>Phone</span><input class="input" name="phone" type="tel" value="${esc(u.phone || '')}"></label>
+        <label class="field"><span>Mobile number</span><input class="input" name="phone" type="tel" inputmode="numeric" value="${esc(u.phone || '')}" placeholder="10-digit mobile number" required></label>
         <button class="btn btn-md" type="submit">Save changes</button>
       </form>
       <form class="card" id="pwForm">
@@ -995,7 +1025,7 @@ on(/^#\/admin\/?$/, async () => {
         .map(([k, v, sub]) => `<div class="card stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join('')}
     </div>
     <div class="grid" style="grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;margin-top:16px" id="ovRow">
-      <div class="card"><div class="row"><h3 style="font-size:19px;flex:1">Booked revenue</h3>
+      <div class="card"><div class="chart-head"><h3>Booked revenue</h3>
         <div class="segmented" id="rangeSeg"><button data-r="ahead" class="on">Next 7 days</button><button data-r="week">Past 7 days</button></div>
         <button class="btn gray btn-sm" id="tblToggle">View as table</button></div>
         <div id="chart" style="margin-top:16px"></div></div>
@@ -1128,7 +1158,7 @@ function staffBookingModal(done) {
     <div class="grid grid-3" style="margin-top:18px;gap:10px">
       <label class="field"><span>Customer email</span><input class="input input-sm" id="nbEmail" type="email" list="custList" required></label>
       <label class="field"><span>Name (new customers)</span><input class="input input-sm" id="nbName"></label>
-      <label class="field"><span>Phone</span><input class="input input-sm" id="nbPhone" type="tel"></label>
+      <label class="field"><span>Mobile</span><input class="input input-sm" id="nbPhone" type="tel" inputmode="numeric" placeholder="10 digits"></label>
     </div>
     <datalist id="custList"></datalist>
     <div class="grid grid-2" style="gap:10px">
@@ -1235,7 +1265,7 @@ on(/^#\/admin\/bookings$/, async () => {
       <select class="input input-sm" id="fSty"><option value="">All stylists</option>${state.stylists.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
       <span class="spacer"></span><span class="small muted" id="fCount"></span>
     </div>
-    <div class="table-wrap"><table><thead><tr><th>When</th><th>Customer</th><th>Service</th><th>Stylist</th><th class="num">Price</th><th>Status</th></tr></thead>
+    <div class="table-wrap"><table><thead><tr><th>When</th><th class="num">Status</th><th>Customer</th><th>Service · Stylist</th><th>Price</th></tr></thead>
     <tbody id="bkRows"></tbody></table></div>`;
   let rows = [];
   async function load() {
@@ -1254,10 +1284,11 @@ on(/^#\/admin\/bookings$/, async () => {
     $('#fCount').textContent = `${rows.length} booking${rows.length === 1 ? '' : 's'}`;
     $('#bkRows').innerHTML = rows.length ? rows.map((b) => `
       <tr data-bid="${b.id}" style="cursor:pointer">
-        <td><strong>${fmtDate(b.date, { month: 'short', day: 'numeric' })}</strong><div class="sub">${fmtTime(b.time)} – ${fmtTime(b.end_time)}</div></td>
-        <td>${esc(b.customer_name)}<div class="sub">${esc(b.customer_email)}</div></td>
-        <td>${esc(b.service_name)}</td><td>${esc(b.stylist_name)}</td>
-        <td class="num">${money(b.price)}</td><td>${badge(b.status)}</td></tr>`).join('')
+        <td><strong>${fmtDate(b.date, { weekday: 'short', month: 'short', day: 'numeric' })}</strong><div class="sub">${fmtTime(b.time)} – ${fmtTime(b.end_time)}</div></td>
+        <td class="num">${badge(b.status)}</td>
+        <td class="span">${esc(b.customer_name)}<div class="sub">${esc(b.customer_phone || b.customer_email)}</div></td>
+        <td class="span" data-label="Service">${esc(b.service_name)} · ${esc(b.stylist_name)}</td>
+        <td class="span" data-label="Price">${money(b.price)}</td></tr>`).join('')
       : `<tr><td colspan="6" class="empty">No bookings match these filters.</td></tr>`;
     $$('[data-bid]', body).forEach((tr) => tr.addEventListener('click', () => bookingDetail(rows.find((b) => b.id === Number(tr.dataset.bid)), load)));
   }
@@ -1274,8 +1305,8 @@ function crudPage({ section, title, endpoint, columns, fields, blank, after }) {
     const load = async () => {
       const items = await api(endpoint);
       body.innerHTML = `<div class="table-wrap"><table><thead><tr>${columns.map((c) => `<th class="${c.cls || ''}">${c.label}</th>`).join('')}<th></th></tr></thead>
-        <tbody>${items.map((it) => `<tr style="${it.active ? '' : 'opacity:.5'}">${columns.map((c) => `<td class="${c.cls || ''}">${c.render(it)}</td>`).join('')}
-          <td class="num"><button class="btn gray btn-sm" data-edit="${it.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>`;
+        <tbody>${items.map((it) => `<tr style="${it.active ? '' : 'opacity:.5'}">${columns.map((c, i) => `<td class="${c.cls || ''} ${i === 0 ? 'span' : ''}" ${i ? `data-label="${c.label}"` : ''}>${c.render(it)}</td>`).join('')}
+          <td class="num span"><button class="btn gray btn-sm" data-edit="${it.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>`;
       $$('[data-edit]', body).forEach((b) => b.addEventListener('click', () => edit(items.find((i) => i.id === Number(b.dataset.edit)))));
     };
     const edit = (item) => {
@@ -1318,7 +1349,7 @@ function crudPage({ section, title, endpoint, columns, fields, blank, after }) {
 const reloadCatalog = async () => {
   [state.services, state.stylists] = await Promise.all([api('/api/services'), api('/api/stylists')]);
 };
-const categories = () => [...new Set(['Hair', 'Colour', 'Treatment', 'Skin', 'Threading & Wax', 'Nails', 'Bridal', ...state.services.map((s) => s.category)])];
+const categories = () => [...new Set([...(state.config?.category_order || []), ...state.services.map((s) => s.category)])];
 
 on(/^#\/admin\/services$/, crudPage({
   section: 'services', title: 'Services', endpoint: '/api/admin/services', after: reloadCatalog,
@@ -1352,7 +1383,7 @@ on(/^#\/admin\/team$/, crudPage({
     { name: 'name', label: 'Name' },
     { name: 'title', label: 'Title' },
     { name: 'bio', label: 'Short bio', type: 'textarea' },
-    { name: 'specialties', label: 'Specialties', hint: `Comma-separated categories (${categories().join(', ')}). Leave empty for all.` },
+    { name: 'specialties', label: 'Specialties', hint: 'Comma-separated categories, e.g. Hair, Threading & Wax, Colour, Bridal. Leave empty for all services.' },
     { name: 'active', label: 'Taking bookings', type: 'switch' },
   ],
 }), 'admin');
@@ -1361,16 +1392,32 @@ on(/^#\/admin\/team$/, crudPage({
 on(/^#\/admin\/customers$/, async () => {
   const body = adminShell('customers', 'Customers');
   body.innerHTML = `<div class="filters"><input class="input input-sm" id="cQ" placeholder="Search name, email or phone" style="min-width:260px"><span class="spacer"></span><span class="small muted" id="cCount"></span></div>
-    <div class="table-wrap"><table><thead><tr><th>Customer</th><th>Phone</th><th class="num">Bookings</th><th class="num">Spent</th><th>Last visit</th><th>Joined</th></tr></thead><tbody id="cRows"></tbody></table></div>`;
+    <div class="table-wrap"><table><thead><tr><th>Customer</th><th>Mobile</th><th class="num">Bookings</th><th class="num">Spent</th><th>Last visit</th><th></th></tr></thead><tbody id="cRows"></tbody></table></div>`;
   const load = async () => {
     const list = await api(`/api/admin/customers?q=${encodeURIComponent($('#cQ').value.trim())}`);
     $('#cCount').textContent = `${list.length} customer${list.length === 1 ? '' : 's'}`;
     $('#cRows').innerHTML = list.map((c) => `<tr>
       <td><div class="row" style="flex-wrap:nowrap">${avatar(c.name, c.id)}<div><strong>${esc(c.name)}</strong><div class="sub">${esc(c.email)}</div></div></div></td>
-      <td>${esc(c.phone || '—')}</td><td class="num">${c.bookings}</td><td class="num">${money(c.spent)}</td>
-      <td>${c.last_visit ? fmtDate(c.last_visit, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
-      <td class="sub">${new Date(c.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}</td></tr>`).join('')
+      <td data-label="Mobile">${c.phone ? `<a href="tel:${esc(c.phone.replace(/\s/g, ''))}">${esc(c.phone)}</a>` : '—'}</td>
+      <td class="num" data-label="Bookings">${c.bookings}</td><td class="num" data-label="Spent">${money(c.spent)}</td>
+      <td data-label="Last visit">${c.last_visit ? fmtDate(c.last_visit, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
+      <td class="num"><button class="btn gray btn-sm" data-reset="${c.id}" data-name="${esc(c.name)}">Reset password</button></td></tr>`).join('')
       || '<tr><td colspan="6" class="empty">No customers found.</td></tr>';
+    $$('[data-reset]', body).forEach((b) => b.addEventListener('click', () => modal(`
+      <h2>Reset password</h2><p class="muted">Set a new password for ${b.dataset.name}. They’ll be signed out everywhere.</p>
+      <form id="rpForm" style="margin-top:16px"><label class="field"><span>New password</span>
+        <input class="input" name="password" type="text" minlength="6" required autocomplete="off"></label>
+        <div class="foot"><button type="button" class="btn gray btn-md" data-close>Cancel</button><button class="btn btn-md">Save password</button></div></form>`, {
+      onMount(m, close) {
+        $('#rpForm', m).addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            await api(`/api/admin/customers/${b.dataset.reset}/password`, { method: 'PUT', body: { password: e.target.password.value } });
+            toast('Password updated — share it with the customer'); close();
+          } catch (err) { toastError(err); }
+        });
+      },
+    })));
   };
   let t;
   $('#cQ').addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 250); });
@@ -1387,7 +1434,7 @@ on(/^#\/admin\/settings$/, async () => {
     <form id="setForm" class="grid" style="gap:16px;max-width:820px">
       <div class="card"><h3 style="font-size:19px;margin-bottom:16px">Salon</h3>
         <div class="grid grid-2" style="gap:0 16px">
-          ${[['salon_name', 'Name'], ['tagline', 'Tagline'], ['address', 'Address'], ['phone', 'Phone'], ['email', 'Email'], ['currency', 'Currency (ISO code, e.g. USD, INR, EUR)']]
+          ${[['salon_name', 'Name'], ['tagline', 'Tagline'], ['address', 'Address'], ['phone', 'Phone'], ['whatsapp', 'WhatsApp number'], ['email', 'Email'], ['instagram', 'Instagram handle (optional)'], ['map_url', 'Google Maps link (optional)'], ['currency', 'Currency (ISO code, e.g. USD, INR, EUR)']]
             .map(([k, l]) => `<label class="field"><span>${l}</span><input class="input input-sm" name="${k}" value="${esc(s[k])}"></label>`).join('')}
           <label class="field"><span>Time zone (used for “today” and slot times)</span>
             <span class="row" style="flex-wrap:nowrap;gap:8px"><input class="input input-sm" name="timezone" id="tzIn" value="${esc(s.timezone)}" list="tzList">
@@ -1459,8 +1506,65 @@ function applyBranding() {
   const c = state.config;
   document.title = c.salon_name;
   $$('[data-salon-name]').forEach((el, i) => (el.textContent = i === 0 ? c.salon_name.split(' ')[0] : c.salon_name));
-  $('#footAddress').textContent = `${c.address} · ${c.phone}`;
-  $('#footCopy').textContent = `© ${new Date().getFullYear()} ${c.salon_name}. All rights reserved.`;
+  renderFooter();
+  const wa = waLink(`Hi ${c.salon_name}! I’d like to book an appointment.`);
+  $('#waFab').classList.toggle('hidden', !wa);
+  if (wa) $('#waFab').href = wa;
+}
+
+function openStatus() {
+  const c = state.config;
+  const h = c.closed_dates.includes(today()) ? null : c.hours[parseDate(today()).getDay()];
+  const now = c.now_min ?? 0;
+  const toM = (t) => { const [a, b] = t.split(':').map(Number); return a * 60 + b; };
+  if (h && now >= toM(h.open) && now < toM(h.close)) return { open: true, text: `Open now · until ${fmtTime(h.close)}` };
+  return { open: false, text: `Closed now · Opens ${nextOpening().replace(/^Today from/, 'today at').replace(/^Tomorrow/, 'tomorrow').replace(/ from /, ' at ')}` };
+}
+
+function renderFooter() {
+  const c = state.config;
+  const st = openStatus();
+  const wa = waLink(`Hi ${c.salon_name}! I’d like to book an appointment.`);
+  const ig = (c.instagram || '').replace(/^@/, '');
+  const days = [1, 2, 3, 4, 5, 6, 0];
+  const dayShort = (d) => new Date(2024, 0, 7 + d).toLocaleDateString(undefined, { weekday: 'short' });
+  const closedDays = days.filter((d) => !c.hours[d]).map(dayShort);
+  const todayHours = c.closed_dates.includes(today()) ? null : c.hours[parseDate(today()).getDay()];
+  $('#footer').innerHTML = `
+    <div class="wrap">
+      <div class="footer-top">
+        <div>
+          <a href="#/" class="footer-brand">${esc(c.salon_name)}</a>
+          <p>${esc(c.tagline)}</p>
+          <p style="margin-top:10px">${esc(c.address)}</p>
+          <span class="open-now ${st.open ? 'open' : 'closed'}">${esc(st.text)}</span>
+          <div class="footer-cta">
+            <a class="btn btn-md" href="#/book">Book now</a>
+            ${wa ? `<a class="btn wa btn-md" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
+          </div>
+        </div>
+        <div><h4>Explore</h4><ul>
+          <li><a href="#/services">Services &amp; prices</a></li><li><a href="#/team">Our team</a></li>
+          <li><a href="#/visit">Hours &amp; location</a></li><li><a href="#/book">Book an appointment</a></li></ul></div>
+        <div><h4>Your account</h4><ul>
+          <li><a href="#/account">My bookings</a></li><li><a href="#/account/profile">Profile</a></li>
+          <li><a href="#/login">Sign in</a></li><li><a href="#/signup">Create account</a></li></ul></div>
+        <div><h4>Contact</h4><ul>
+          <li><a href="${telLink()}">${esc(c.phone)}</a></li>
+          <li><a href="mailto:${esc(c.email)}">${esc(c.email)}</a></li>
+          <li><a href="${mapLink()}" target="_blank" rel="noopener">Get directions</a></li>
+          <li>Today: ${todayHours ? `${fmtTime(todayHours.open)} – ${fmtTime(todayHours.close)}` : 'Closed'}${closedDays.length ? `<br>Weekly off: ${esc(closedDays.join(', '))}` : ''}<br><a href="#/visit">All opening hours ›</a></li>
+        </ul></div>
+      </div>
+      <div class="footer-bottom">
+        <span>© ${new Date().getFullYear()} ${esc(c.salon_name)}. All rights reserved.</span>
+        <div class="footer-social">
+          ${wa ? `<a href="${wa}" target="_blank" rel="noopener" aria-label="WhatsApp">${ICON.wa}</a>` : ''}
+          ${ig ? `<a href="https://instagram.com/${encodeURIComponent(ig)}" target="_blank" rel="noopener" aria-label="Instagram">${ICON.ig}</a>` : ''}
+          <a href="${telLink()}" aria-label="Call">${ICON.phone}</a>
+        </div>
+      </div>
+    </div>`;
 }
 
 (async function boot() {

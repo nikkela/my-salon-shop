@@ -2,7 +2,7 @@
 import { hashPassword, verifyPassword, newToken } from './auth.js';
 import * as S from './slots.js';
 import STATIC from './static.gen.js';
-import { DEFAULT_SETTINGS, SERVICES, STYLISTS } from './seed-data.js';
+import { DEFAULT_SETTINGS, SERVICES, STYLISTS, CATEGORY_ORDER } from './seed-data.js';
 
 const SESSION_DAYS = 30;
 
@@ -22,6 +22,18 @@ const json = (data, status = 200, headers = {}) =>
 
 const str = (v, max = 200) => String(v ?? '').trim().slice(0, max);
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Normalises an Indian mobile number to '+91 XXXXX XXXXX', or returns null if invalid. */
+function indianMobile(v) {
+  const d = String(v ?? '').replace(/[^\d]/g, '').replace(/^(91|0)(?=\d{10}$)/, '');
+  return /^[6-9]\d{9}$/.test(d) ? `+91 ${d.slice(0, 5)} ${d.slice(5)}` : null;
+}
+const catRank = (c) => {
+  const i = CATEGORY_ORDER.indexOf(c);
+  return i < 0 ? CATEGORY_ORDER.length : i;
+};
+const sortServices = (list) =>
+  list.sort((a, b) => b.active - a.active || catRank(a.category) - catRank(b.category) || a.category.localeCompare(b.category) || a.price - b.price);
 
 /* ---------------------------------------------------------------- settings */
 async function getSettings(db) {
@@ -187,12 +199,12 @@ const A = { auth: true, admin: true };
 /* ---------- public */
 route('GET', '/api/config', async (ctx) => {
   const s = await ctx.settings();
-  const pick = ['salon_name', 'tagline', 'address', 'phone', 'email', 'currency', 'timezone', 'hours', 'closed_dates', 'max_days_ahead', 'cancel_cutoff_hours'];
+  const pick = ['salon_name', 'tagline', 'address', 'phone', 'whatsapp', 'instagram', 'map_url', 'email', 'currency', 'timezone', 'hours', 'closed_dates', 'max_days_ahead', 'cancel_cutoff_hours'];
   const now = S.nowLocal(s.timezone);
-  return { ...Object.fromEntries(pick.map((k) => [k, s[k]])), quick_login: ctx.quickLogin, today: now.date, now_min: now.min };
+  return { ...Object.fromEntries(pick.map((k) => [k, s[k]])), category_order: CATEGORY_ORDER, quick_login: ctx.quickLogin, today: now.date, now_min: now.min };
 });
 
-route('GET', '/api/services', async ({ db }) => (await db.prepare('SELECT * FROM services WHERE active = 1 ORDER BY category, price').all()).results);
+route('GET', '/api/services', async ({ db }) => sortServices((await db.prepare('SELECT * FROM services WHERE active = 1').all()).results));
 route('GET', '/api/stylists', async ({ db }) =>
   (await db.prepare('SELECT id, name, title, bio, specialties FROM stylists WHERE active = 1 ORDER BY id').all()).results);
 
@@ -228,10 +240,11 @@ route('POST', '/api/auth/register', async (ctx) => {
   rateLimit(ctx, 'register', 20);
   const name = str(body.name, 80);
   const email = str(body.email, 120).toLowerCase();
-  const phone = str(body.phone, 30);
+  const phone = indianMobile(body.phone);
   const password = String(body.password || '');
   if (name.length < 2) throw bad('Please enter your name.');
   if (!EMAIL_RE.test(email)) throw bad('Please enter a valid email.');
+  if (!phone) throw bad('Please enter a valid 10-digit mobile number.');
   if (password.length < 6) throw bad('Password must be at least 6 characters.');
   if (await db.prepare('SELECT 1 FROM users WHERE email = ?').bind(email).first())
     throw new HttpError(409, 'An account with this email already exists. Try signing in.');
@@ -278,9 +291,11 @@ route('PUT', '/api/me', { auth: true }, async ({ body, user, db }) => {
   const email = str(body.email, 120).toLowerCase();
   if (name.length < 2) throw bad('Please enter your name.');
   if (!EMAIL_RE.test(email)) throw bad('Please enter a valid email.');
+  const phone = indianMobile(body.phone);
+  if (!phone) throw bad('Please enter a valid 10-digit mobile number.');
   if (await db.prepare('SELECT id FROM users WHERE email = ? AND id != ?').bind(email, user.id).first())
     throw new HttpError(409, 'That email is already in use.');
-  await db.prepare('UPDATE users SET name = ?, email = ?, phone = ? WHERE id = ?').bind(name, email, str(body.phone, 30), user.id).run();
+  await db.prepare('UPDATE users SET name = ?, email = ?, phone = ? WHERE id = ?').bind(name, email, phone, user.id).run();
   return { user: publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first()) };
 });
 
@@ -421,8 +436,9 @@ route('POST', '/api/admin/bookings', A, async (ctx) => {
   const slot = await resolveSlot(ctx, body);
   if (!cust) {
     if (name.length < 2) throw bad('Customer name is required for new customers.');
+    if (body.customer_phone && !indianMobile(body.customer_phone)) throw bad('Please enter a valid 10-digit mobile number.');
     const r = await db.prepare('INSERT INTO users(name, email, phone, password_hash) VALUES (?, ?, ?, ?)')
-      .bind(name, email, str(body.customer_phone, 30), await hashPassword(newToken())).run();
+      .bind(name, email, indianMobile(body.customer_phone) || '', await hashPassword(newToken())).run();
     cust = { id: r.meta.last_row_id };
   }
   return { booking: await insertBooking(ctx, cust.id, slot, body.date, body.notes) };
@@ -465,8 +481,8 @@ function stylistInput(body) {
   return v;
 }
 
-function crud(path, table, cols, input, order) {
-  route('GET', path, A, async ({ db }) => (await db.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).all()).results);
+function crud(path, table, cols, input, order, sort = (x) => x) {
+  route('GET', path, A, async ({ db }) => sort((await db.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).all()).results));
   route('POST', path, A, async ({ body, db }) => {
     const v = input(body);
     const r = await db.prepare(`INSERT INTO ${table}(${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).bind(...cols.map((c) => v[c])).run();
@@ -485,8 +501,20 @@ function crud(path, table, cols, input, order) {
     return { ok: true, archived: !!used };
   });
 }
-crud('/api/admin/services', 'services', ['name', 'category', 'description', 'duration_min', 'price', 'active'], serviceInput, 'active DESC, category, name');
+crud('/api/admin/services', 'services', ['name', 'category', 'description', 'duration_min', 'price', 'active'], serviceInput, 'active DESC, category, name', sortServices);
 crud('/api/admin/stylists', 'stylists', ['name', 'title', 'bio', 'specialties', 'active'], stylistInput, 'active DESC, name');
+
+route('PUT', '/api/admin/customers/:id/password', A, async ({ params, body, db }) => {
+  const pw = String(body.password || '');
+  if (pw.length < 6) throw bad('Password must be at least 6 characters.');
+  const u = await db.prepare(`SELECT id FROM users WHERE id = ? AND role = 'customer'`).bind(Number(params.id)).first();
+  if (!u) throw new HttpError(404, 'Customer not found.');
+  await db.batch([
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(await hashPassword(pw), u.id),
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(u.id),
+  ]);
+  return { ok: true };
+});
 
 route('GET', '/api/admin/customers', A, async ({ query, db }) => {
   const q = `%${str(query.get('q'), 80)}%`;
@@ -505,7 +533,11 @@ route('GET', '/api/admin/customers', A, async ({ query, db }) => {
 route('GET', '/api/admin/settings', A, (ctx) => ctx.settings());
 route('PUT', '/api/admin/settings', A, async ({ body, db }) => {
   const patch = {};
-  for (const k of ['salon_name', 'tagline', 'address', 'phone', 'email', 'currency']) if (k in body) patch[k] = str(body[k], 120);
+  for (const k of ['salon_name', 'tagline', 'address', 'phone', 'email', 'currency', 'instagram', 'map_url']) if (k in body) patch[k] = str(body[k], 200);
+  if ('whatsapp' in body) {
+    if (body.whatsapp && !indianMobile(body.whatsapp)) throw bad('WhatsApp must be a valid 10-digit mobile number.');
+    patch.whatsapp = body.whatsapp ? indianMobile(body.whatsapp) : '';
+  }
   if ('timezone' in body) {
     const tz = str(body.timezone, 64);
     try { new Intl.DateTimeFormat('en', { timeZone: tz }); } catch { throw bad('Unknown time zone.'); }
