@@ -27,9 +27,6 @@ export const DEFAULT_SETTINGS = {
   closed_dates: [],
 };
 
-// Order in which service categories are shown everywhere on the site.
-export const CATEGORY_ORDER = ['Hair', 'Threading & Wax', 'Colour', 'Bridal', 'Treatment', 'Skin', 'Nails'];
-
 // [name, category, description, duration (min), price (₹)]
 export const SERVICES = [
   ['Haircut & Styling (Women)', 'Hair', 'Consultation, hair wash, precision cut and blow-dry.', 45, 700],

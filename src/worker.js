@@ -2,7 +2,7 @@
 import { hashPassword, verifyPassword, newToken } from './auth.js';
 import * as S from './slots.js';
 import STATIC from './static.gen.js';
-import { DEFAULT_SETTINGS, SERVICES, STYLISTS, CATEGORY_ORDER } from './seed-data.js';
+import { DEFAULT_SETTINGS, SERVICES, STYLISTS } from './seed-data.js';
 
 const SESSION_DAYS = 30;
 
@@ -28,12 +28,28 @@ function indianMobile(v) {
   const d = String(v ?? '').replace(/[^\d]/g, '').replace(/^(91|0)(?=\d{10}$)/, '');
   return /^[6-9]\d{9}$/.test(d) ? `+91 ${d.slice(0, 5)} ${d.slice(5)}` : null;
 }
-const catRank = (c) => {
-  const i = CATEGORY_ORDER.indexOf(c);
-  return i < 0 ? CATEGORY_ORDER.length : i;
-};
-const sortServices = (list) =>
-  list.sort((a, b) => b.active - a.active || catRank(a.category) - catRank(b.category) || a.category.localeCompare(b.category) || a.price - b.price);
+const LISTS = { category: 'Service categories', source: 'Booking sources', payment: 'Payment methods', reason: 'Cancel / no-show reasons' };
+const isStaff = (u) => u && (u.role === 'staff' || u.role === 'admin');
+
+/** Active dropdown options grouped by list, in admin-defined order. */
+async function getOptions(db, all = false) {
+  const { results } = await db.prepare(`SELECT * FROM options ${all ? '' : 'WHERE active = 1'} ORDER BY list, sort, id`).all();
+  const out = Object.fromEntries(Object.keys(LISTS).map((k) => [k, []]));
+  for (const o of results) (out[o.list] ||= []).push(all ? o : o.label);
+  return out;
+}
+async function sortServices(db, list) {
+  const order = (await getOptions(db)).category;
+  const rank = (c) => { const i = order.indexOf(c); return i < 0 ? order.length : i; };
+  return list.sort((a, b) => b.active - a.active || rank(a.category) - rank(b.category) || a.category.localeCompare(b.category) || a.price - b.price);
+}
+async function checkOption(db, list, value, required = false) {
+  const v = str(value, 80);
+  if (!v) { if (required) throw bad(`Please choose a ${LISTS[list].replace(/s$/, '').toLowerCase()}.`); return ''; }
+  const ok = await db.prepare('SELECT 1 FROM options WHERE list = ? AND label = ? AND active = 1').bind(list, v).first();
+  if (!ok) throw bad(`“${v}” is not in the ${LISTS[list].toLowerCase()} list.`);
+  return v;
+}
 
 /* ---------------------------------------------------------------- settings */
 async function getSettings(db) {
@@ -74,6 +90,7 @@ async function seedBatch(db, u, sv, st) {
     db.prepare(`INSERT INTO settings(key, value) VALUES ('seeded', 'true')`),
     u.bind('Salon Admin', 'admin@salon.local', '+91 90000 00001', await hashPassword('admin123'), 'admin'),
     u.bind('Demo Customer', 'demo@salon.local', '+91 90000 00002', await hashPassword('demo123'), 'customer'),
+    u.bind('Front Desk', 'staff@salon.local', '+91 90000 00003', await hashPassword('staff123'), 'staff'),
     ...SERVICES.map((s) => sv.bind(...s)),
     ...STYLISTS.map((s) => st.bind(...s)),
   ]);
@@ -91,13 +108,13 @@ function parseCookies(req) {
 const sessionCookie = (token, maxAge, secure) =>
   `sid=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 
-const publicUser = (u) => u && { id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role, created_at: u.created_at };
+const publicUser = (u) => u && { id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role, stylist_id: u.stylist_id ?? null, created_at: u.created_at };
 
 async function currentUser(ctx) {
   const token = parseCookies(ctx.req).sid;
   if (!token) return null;
   return ctx.db
-    .prepare('SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ?')
+    .prepare('SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ? AND u.active = 1')
     .bind(token, Date.now())
     .first();
 }
@@ -154,15 +171,15 @@ async function resolveSlot(ctx, { service_id, stylist_id, date, time, excludeBoo
 }
 
 /** Inserts a booking only if the stylist is still free (guards against concurrent requests). */
-async function insertBooking(ctx, userId, slot, date, notes) {
+async function insertBooking(ctx, userId, slot, date, notes, source = 'Online') {
   const r = await ctx.db
     .prepare(
-      `INSERT INTO bookings(user_id, service_id, stylist_id, date, start_min, end_min, price, notes)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?
+      `INSERT INTO bookings(user_id, service_id, stylist_id, date, start_min, end_min, price, notes, source)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
        WHERE NOT EXISTS (SELECT 1 FROM bookings WHERE stylist_id = ? AND date = ?
          AND status IN ('confirmed','completed') AND start_min < ? AND end_min > ?)`
     )
-    .bind(userId, slot.service.id, slot.stylistId, date, slot.start, slot.end, slot.service.price, str(notes, 500),
+    .bind(userId, slot.service.id, slot.stylistId, date, slot.start, slot.end, slot.service.price, str(notes, 500), source,
       slot.stylistId, date, slot.end, slot.start)
     .run();
   if (!r.meta.changes) throw new HttpError(409, 'Sorry, that time was just taken. Please pick another slot.');
@@ -195,16 +212,18 @@ const route = (method, pattern, opts, handler) => {
   routes.push({ method, re, keys, handler, ...opts });
 };
 const A = { auth: true, admin: true };
+const ST = { auth: true, staff: true };
 
 /* ---------- public */
 route('GET', '/api/config', async (ctx) => {
   const s = await ctx.settings();
   const pick = ['salon_name', 'tagline', 'address', 'phone', 'whatsapp', 'instagram', 'map_url', 'email', 'currency', 'timezone', 'hours', 'closed_dates', 'max_days_ahead', 'cancel_cutoff_hours'];
   const now = S.nowLocal(s.timezone);
-  return { ...Object.fromEntries(pick.map((k) => [k, s[k]])), category_order: CATEGORY_ORDER, quick_login: ctx.quickLogin, today: now.date, now_min: now.min };
+  return { ...Object.fromEntries(pick.map((k) => [k, s[k]])), category_order: (await getOptions(ctx.db)).category, quick_login: ctx.quickLogin, today: now.date, now_min: now.min };
 });
 
-route('GET', '/api/services', async ({ db }) => sortServices((await db.prepare('SELECT * FROM services WHERE active = 1').all()).results));
+route('GET', '/api/services', async ({ db }) => sortServices(db, (await db.prepare('SELECT * FROM services WHERE active = 1').all()).results));
+route('GET', '/api/options', ST, async ({ db }) => getOptions(db));
 route('GET', '/api/stylists', async ({ db }) =>
   (await db.prepare('SELECT id, name, title, bio, specialties FROM stylists WHERE active = 1 ORDER BY id').all()).results);
 
@@ -213,7 +232,7 @@ route('GET', '/api/slots', async (ctx) => {
   let exclude = query.get('exclude');
   if (exclude) {
     const own = user && (await db.prepare('SELECT user_id FROM bookings WHERE id = ?').bind(Number(exclude)).first());
-    if (!own || (own.user_id !== user.id && user.role !== 'admin')) throw new HttpError(403, 'Forbidden');
+    if (!own || (own.user_id !== user.id && !isStaff(user))) throw new HttpError(403, 'Forbidden');
   }
   return slotsFor(ctx, { date: query.get('date'), serviceId: query.get('service_id'), stylistId: query.get('stylist_id') || null, excludeBookingId: exclude });
 });
@@ -253,23 +272,27 @@ route('POST', '/api/auth/register', async (ctx) => {
   return { user: publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').bind(r.meta.last_row_id).first()) };
 });
 
-route('POST', '/api/auth/login', async (ctx) => {
+async function passwordLogin(ctx, staffPortal) {
   rateLimit(ctx, 'login', 10);
-  const u = await ctx.db.prepare('SELECT * FROM users WHERE email = ?').bind(str(ctx.body.email, 120).toLowerCase()).first();
+  const u = await ctx.db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').bind(str(ctx.body.email, 120).toLowerCase()).first();
   if (!u || !(await verifyPassword(String(ctx.body.password || ''), u.password_hash))) throw new HttpError(401, 'Incorrect email or password.');
+  if (staffPortal && !isStaff(u)) throw new HttpError(403, 'This sign-in is for salon staff. Customers, please use the customer sign-in.');
+  if (!staffPortal && isStaff(u)) throw new HttpError(403, 'Staff and admins, please use the Staff sign-in page.');
   await startSession(ctx, u.id);
   return { user: publicUser(u) };
-});
+}
+route('POST', '/api/auth/login', (ctx) => passwordLogin(ctx, false));
+route('POST', '/api/auth/staff-login', (ctx) => passwordLogin(ctx, true));
 
 // One-click (bypass) sign in to the demo customer or admin account.
 route('POST', '/api/auth/quick', async (ctx) => {
   if (!ctx.quickLogin) throw new HttpError(403, 'One-click sign in is disabled.');
-  const role = ctx.body.role === 'admin' ? 'admin' : 'customer';
-  const email = role === 'admin' ? 'admin@salon.local' : 'demo@salon.local';
+  const role = ['admin', 'staff'].includes(ctx.body.role) ? ctx.body.role : 'customer';
+  const email = { admin: 'admin@salon.local', staff: 'staff@salon.local', customer: 'demo@salon.local' }[role];
   let u = await ctx.db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
   if (!u) {
     const r = await ctx.db.prepare('INSERT INTO users(name, email, password_hash, role) VALUES (?, ?, ?, ?)')
-      .bind(role === 'admin' ? 'Salon Admin' : 'Demo Customer', email, await hashPassword(newToken()), role).run();
+      .bind({ admin: 'Salon Admin', staff: 'Front Desk', customer: 'Demo Customer' }[role], email, await hashPassword(newToken()), role).run();
     u = await ctx.db.prepare('SELECT * FROM users WHERE id = ?').bind(r.meta.last_row_id).first();
   }
   await startSession(ctx, u.id);
@@ -314,19 +337,19 @@ route('POST', '/api/bookings', { auth: true }, async (ctx) => {
   const settings = await ctx.settings();
   const open = await db.prepare(`SELECT COUNT(*) AS n FROM bookings WHERE user_id = ? AND status = 'confirmed' AND date >= ?`)
     .bind(user.id, S.nowLocal(settings.timezone).date).first();
-  if (open.n >= 10 && user.role !== 'admin') throw bad('You have too many upcoming bookings.');
+  if (open.n >= 10 && !isStaff(user)) throw bad('You have too many upcoming bookings.');
   const slot = await resolveSlot(ctx, body);
   return { booking: await insertBooking(ctx, user.id, slot, body.date, body.notes) };
 });
 
 async function ownBooking(db, id, user) {
   const b = await getBooking(db, Number(id));
-  if (!b || (b.user_id !== user.id && user.role !== 'admin')) throw new HttpError(404, 'Booking not found.');
+  if (!b || (b.user_id !== user.id && !isStaff(user))) throw new HttpError(404, 'Booking not found.');
   return b;
 }
 
 async function checkCutoff(ctx, b) {
-  if (ctx.user.role === 'admin') return;
+  if (isStaff(ctx.user)) return;
   const settings = await ctx.settings();
   const cutoff = Number(settings.cancel_cutoff_hours) || 0;
   const now = S.nowLocal(settings.timezone);
@@ -411,7 +434,7 @@ route('GET', '/api/admin/stats', A, async (ctx) => {
   };
 });
 
-route('GET', '/api/admin/bookings', A, async ({ query, db }) => {
+route('GET', '/api/admin/bookings', ST, async ({ query, db }) => {
   const where = [];
   const args = [];
   if (S.isValidDate(query.get('from'))) where.push('b.date >= ?'), args.push(query.get('from'));
@@ -427,34 +450,48 @@ route('GET', '/api/admin/bookings', A, async ({ query, db }) => {
   return (await db.prepare(sql).bind(...args).all()).results.map(decorate);
 });
 
-route('POST', '/api/admin/bookings', A, async (ctx) => {
+// Walk-in / phone booking by staff: pick an existing customer, or add a new one by name + mobile.
+route('POST', '/api/admin/bookings', ST, async (ctx) => {
   const { body, db } = ctx;
-  const email = str(body.customer_email, 120).toLowerCase();
-  const name = str(body.customer_name, 80);
-  if (!EMAIL_RE.test(email)) throw bad('Customer email is required.');
-  let cust = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+  const source = await checkOption(db, 'source', body.source, true);
+  let cust = null;
+  if (body.customer_id) {
+    cust = await db.prepare(`SELECT id FROM users WHERE id = ? AND role = 'customer'`).bind(Number(body.customer_id)).first();
+    if (!cust) throw bad('Please choose a customer.');
+  }
   const slot = await resolveSlot(ctx, body);
   if (!cust) {
-    if (name.length < 2) throw bad('Customer name is required for new customers.');
-    if (body.customer_phone && !indianMobile(body.customer_phone)) throw bad('Please enter a valid 10-digit mobile number.');
-    const r = await db.prepare('INSERT INTO users(name, email, phone, password_hash) VALUES (?, ?, ?, ?)')
-      .bind(name, email, indianMobile(body.customer_phone) || '', await hashPassword(newToken())).run();
-    cust = { id: r.meta.last_row_id };
+    const name = str(body.customer_name, 80);
+    const phone = indianMobile(body.customer_phone);
+    if (name.length < 2) throw bad('Please enter the customer’s name.');
+    if (!phone) throw bad('Please enter a valid 10-digit mobile number.');
+    cust = await db.prepare(`SELECT id FROM users WHERE phone = ? AND role = 'customer'`).bind(phone).first();
+    if (!cust) {
+      let email = str(body.customer_email, 120).toLowerCase();
+      if (email && !EMAIL_RE.test(email)) throw bad('Please enter a valid email or leave it empty.');
+      if (!email) email = `walkin-${phone.replace(/\D/g, '')}@guest.local`;
+      if (await db.prepare('SELECT 1 FROM users WHERE email = ?').bind(email).first()) throw new HttpError(409, 'That email already belongs to an account.');
+      const r = await db.prepare('INSERT INTO users(name, email, phone, password_hash) VALUES (?, ?, ?, ?)')
+        .bind(name, email, phone, await hashPassword(newToken())).run();
+      cust = { id: r.meta.last_row_id };
+    }
   }
-  return { booking: await insertBooking(ctx, cust.id, slot, body.date, body.notes) };
+  return { booking: await insertBooking(ctx, cust.id, slot, body.date, body.notes, source) };
 });
 
-route('PATCH', '/api/admin/bookings/:id', A, async ({ params, body, db }) => {
+route('PATCH', '/api/admin/bookings/:id', ST, async ({ params, body, db }) => {
   const b = await getBooking(db, Number(params.id));
   if (!b) throw new HttpError(404, 'Booking not found.');
   if (!['confirmed', 'completed', 'cancelled', 'no_show'].includes(body.status)) throw bad('Invalid status.');
+  const payment = body.status === 'completed' ? await checkOption(db, 'payment', body.payment_method, true) : '';
+  const reason = ['cancelled', 'no_show'].includes(body.status) ? await checkOption(db, 'reason', body.status_reason, true) : '';
   if (body.status === 'confirmed' && b.status === 'cancelled') {
     const clash = await db
       .prepare(`SELECT 1 FROM bookings WHERE stylist_id = ? AND date = ? AND id != ? AND status IN ('confirmed','completed') AND start_min < ? AND end_min > ?`)
       .bind(b.stylist_id, b.date, b.id, b.end_min, b.start_min).first();
     if (clash) throw new HttpError(409, 'That slot has since been booked by someone else.');
   }
-  await db.prepare('UPDATE bookings SET status = ? WHERE id = ?').bind(body.status, b.id).run();
+  await db.prepare('UPDATE bookings SET status = ?, payment_method = ?, status_reason = ? WHERE id = ?').bind(body.status, payment, reason, b.id).run();
   return { booking: await getBooking(db, b.id) };
 });
 
@@ -481,15 +518,17 @@ function stylistInput(body) {
   return v;
 }
 
-function crud(path, table, cols, input, order, sort = (x) => x) {
-  route('GET', path, A, async ({ db }) => sort((await db.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).all()).results));
+function crud(path, table, cols, input, order, sort = (db, x) => x, validate = async () => {}) {
+  route('GET', path, A, async ({ db }) => sort(db, (await db.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).all()).results));
   route('POST', path, A, async ({ body, db }) => {
     const v = input(body);
+    await validate(db, v);
     const r = await db.prepare(`INSERT INTO ${table}(${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).bind(...cols.map((c) => v[c])).run();
     return db.prepare(`SELECT * FROM ${table} WHERE id = ?`).bind(r.meta.last_row_id).first();
   });
   route('PUT', `${path}/:id`, A, async ({ params, body, db }) => {
     const v = input(body);
+    await validate(db, v);
     await db.prepare(`UPDATE ${table} SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`).bind(...cols.map((c) => v[c]), Number(params.id)).run();
     return db.prepare(`SELECT * FROM ${table} WHERE id = ?`).bind(Number(params.id)).first();
   });
@@ -501,7 +540,7 @@ function crud(path, table, cols, input, order, sort = (x) => x) {
     return { ok: true, archived: !!used };
   });
 }
-crud('/api/admin/services', 'services', ['name', 'category', 'description', 'duration_min', 'price', 'active'], serviceInput, 'active DESC, category, name', sortServices);
+crud('/api/admin/services', 'services', ['name', 'category', 'description', 'duration_min', 'price', 'active'], serviceInput, 'active DESC, category, name', sortServices, async (db, v) => { v.category = await checkOption(db, 'category', v.category, true); });
 crud('/api/admin/stylists', 'stylists', ['name', 'title', 'bio', 'specialties', 'active'], stylistInput, 'active DESC, name');
 
 route('PUT', '/api/admin/customers/:id/password', A, async ({ params, body, db }) => {
@@ -516,7 +555,7 @@ route('PUT', '/api/admin/customers/:id/password', A, async ({ params, body, db }
   return { ok: true };
 });
 
-route('GET', '/api/admin/customers', A, async ({ query, db }) => {
+route('GET', '/api/admin/customers', ST, async ({ query, db }) => {
   const q = `%${str(query.get('q'), 80)}%`;
   return (await db
     .prepare(
@@ -528,6 +567,117 @@ route('GET', '/api/admin/customers', A, async ({ query, db }) => {
        GROUP BY u.id ORDER BY u.created_at DESC LIMIT 500`
     )
     .bind(q, q, q).all()).results;
+});
+
+/* ---------- admin: dropdown lists */
+route('GET', '/api/admin/options', A, async ({ db }) => ({ lists: LISTS, options: await getOptions(db, true) }));
+route('POST', '/api/admin/options', A, async ({ body, db }) => {
+  const list = String(body.list || '');
+  const label = str(body.label, 60);
+  if (!LISTS[list]) throw bad('Unknown list.');
+  if (label.length < 1) throw bad('Please enter a name.');
+  if (await db.prepare('SELECT 1 FROM options WHERE list = ? AND label = ? COLLATE NOCASE').bind(list, label).first())
+    throw new HttpError(409, `“${label}” is already in this list.`);
+  const max = await db.prepare('SELECT COALESCE(MAX(sort), 0) AS m FROM options WHERE list = ?').bind(list).first();
+  await db.prepare('INSERT INTO options(list, label, sort) VALUES (?, ?, ?)').bind(list, label, max.m + 1).run();
+  return { ok: true };
+});
+route('PUT', '/api/admin/options/:id', A, async ({ params, body, db }) => {
+  const o = await db.prepare('SELECT * FROM options WHERE id = ?').bind(Number(params.id)).first();
+  if (!o) throw new HttpError(404, 'Option not found.');
+  const label = 'label' in body ? str(body.label, 60) : o.label;
+  const active = 'active' in body ? (body.active ? 1 : 0) : o.active;
+  if (!label) throw bad('Please enter a name.');
+  if (label !== o.label && (await db.prepare('SELECT 1 FROM options WHERE list = ? AND label = ? COLLATE NOCASE AND id != ?').bind(o.list, label, o.id).first()))
+    throw new HttpError(409, `“${label}” is already in this list.`);
+  const batch = [db.prepare('UPDATE options SET label = ?, active = ? WHERE id = ?').bind(label, active, o.id)];
+  if (o.list === 'category' && label !== o.label) {
+    batch.push(db.prepare('UPDATE services SET category = ? WHERE category = ?').bind(label, o.label));
+    const { results } = await db.prepare('SELECT id, specialties FROM stylists').all();
+    for (const st of results) {
+      const parts = (st.specialties || '').split(',').map((x) => x.trim());
+      if (parts.includes(o.label)) batch.push(db.prepare('UPDATE stylists SET specialties = ? WHERE id = ?').bind(parts.map((x) => (x === o.label ? label : x)).join(','), st.id));
+    }
+  }
+  await db.batch(batch);
+  return { ok: true };
+});
+route('POST', '/api/admin/options/:id/move', A, async ({ params, body, db }) => {
+  const o = await db.prepare('SELECT * FROM options WHERE id = ?').bind(Number(params.id)).first();
+  if (!o) throw new HttpError(404, 'Option not found.');
+  const { results } = await db.prepare('SELECT id FROM options WHERE list = ? ORDER BY sort, id').bind(o.list).all();
+  const ids = results.map((r) => r.id);
+  const i = ids.indexOf(o.id);
+  const j = i + (body.dir === 'up' ? -1 : 1);
+  if (j < 0 || j >= ids.length) return { ok: true };
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  await db.batch(ids.map((id, n) => db.prepare('UPDATE options SET sort = ? WHERE id = ?').bind(n + 1, id)));
+  return { ok: true };
+});
+route('DELETE', '/api/admin/options/:id', A, async ({ params, db }) => {
+  const o = await db.prepare('SELECT * FROM options WHERE id = ?').bind(Number(params.id)).first();
+  if (!o) throw new HttpError(404, 'Option not found.');
+  if (o.list === 'category' && (await db.prepare('SELECT 1 FROM services WHERE category = ? AND active = 1').bind(o.label).first()))
+    throw bad(`Some live services still use “${o.label}”. Move them to another category first, or hide this option instead.`);
+  await db.prepare('DELETE FROM options WHERE id = ?').bind(o.id).run();
+  return { ok: true };
+});
+
+/* ---------- admin: staff accounts */
+route('GET', '/api/admin/staff', A, async ({ db }) =>
+  (await db.prepare(`SELECT u.id, u.name, u.email, u.phone, u.role, u.stylist_id, u.active, u.created_at, st.name AS stylist_name
+     FROM users u LEFT JOIN stylists st ON st.id = u.stylist_id WHERE u.role IN ('staff','admin') ORDER BY u.role, u.name`).all()).results);
+
+async function staffInput(db, body, isNew) {
+  const v = {
+    name: str(body.name, 80),
+    email: str(body.email, 120).toLowerCase(),
+    phone: body.phone ? indianMobile(body.phone) : '',
+    role: body.role === 'admin' ? 'admin' : 'staff',
+    stylist_id: body.stylist_id ? Number(body.stylist_id) : null,
+    active: body.active === false || body.active === 0 ? 0 : 1,
+  };
+  if (v.name.length < 2) throw bad('Please enter a name.');
+  if (isNew && !EMAIL_RE.test(v.email)) throw bad('Please enter a valid email (used to sign in).');
+  if (v.phone === null) throw bad('Please enter a valid 10-digit mobile number.');
+  if (v.stylist_id && !(await db.prepare('SELECT 1 FROM stylists WHERE id = ?').bind(v.stylist_id).first())) throw bad('Unknown stylist.');
+  return v;
+}
+async function adminsLeft(db, exceptId) {
+  return (await db.prepare(`SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1 AND id != ?`).bind(exceptId).first()).n;
+}
+route('POST', '/api/admin/staff', A, async ({ body, db }) => {
+  const v = await staffInput(db, body, true);
+  if (String(body.password || '').length < 6) throw bad('Password must be at least 6 characters.');
+  if (await db.prepare('SELECT 1 FROM users WHERE email = ?').bind(v.email).first()) throw new HttpError(409, 'An account with this email already exists.');
+  await db.prepare('INSERT INTO users(name, email, phone, password_hash, role, stylist_id) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(v.name, v.email, v.phone, await hashPassword(String(body.password)), v.role, v.stylist_id).run();
+  return { ok: true };
+});
+route('PUT', '/api/admin/staff/:id', A, async ({ params, body, db, user }) => {
+  const id = Number(params.id);
+  const u = await db.prepare(`SELECT * FROM users WHERE id = ? AND role IN ('staff','admin')`).bind(id).first();
+  if (!u) throw new HttpError(404, 'Staff member not found.');
+  const v = await staffInput(db, { ...body, email: u.email }, false);
+  if (u.role === 'admin' && (v.role !== 'admin' || !v.active) && (await adminsLeft(db, id)) === 0) throw bad('You need at least one active admin.');
+  if (id === user.id && !v.active) throw bad('You can’t deactivate your own account.');
+  const batch = [db.prepare('UPDATE users SET name = ?, phone = ?, role = ?, stylist_id = ?, active = ? WHERE id = ?').bind(v.name, v.phone, v.role, v.stylist_id, v.active, id)];
+  if (!v.active) batch.push(db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id));
+  if (body.password) {
+    if (String(body.password).length < 6) throw bad('Password must be at least 6 characters.');
+    batch.push(db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(await hashPassword(String(body.password)), id));
+  }
+  await db.batch(batch);
+  return { ok: true };
+});
+route('DELETE', '/api/admin/staff/:id', A, async ({ params, db, user }) => {
+  const id = Number(params.id);
+  const u = await db.prepare(`SELECT * FROM users WHERE id = ? AND role IN ('staff','admin')`).bind(id).first();
+  if (!u) throw new HttpError(404, 'Staff member not found.');
+  if (id === user.id) throw bad('You can’t remove your own account.');
+  if (u.role === 'admin' && (await adminsLeft(db, id)) === 0) throw bad('You need at least one active admin.');
+  await db.batch([db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id), db.prepare('DELETE FROM users WHERE id = ?').bind(id)]);
+  return { ok: true };
 });
 
 route('GET', '/api/admin/settings', A, (ctx) => ctx.settings());
@@ -612,7 +762,9 @@ export default {
       ctx.user = await currentUser(ctx);
       if (r.auth && !ctx.user) throw new HttpError(401, 'Please sign in.');
       if (r.admin && ctx.user.role !== 'admin') throw new HttpError(403, 'Admins only.');
-      ctx.body = req.method === 'GET' ? {} : await req.json().catch(() => { throw bad('Invalid JSON'); });
+      if (r.staff && !isStaff(ctx.user)) throw new HttpError(403, 'Staff only.');
+      const raw = req.method === 'GET' ? '' : await req.text();
+      try { ctx.body = raw ? JSON.parse(raw) : {}; } catch { throw bad('Invalid JSON'); }
 
       const result = await r.handler(ctx);
       return withHeaders(result instanceof Response ? result : json(result ?? { ok: true }), headers);

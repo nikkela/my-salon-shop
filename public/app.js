@@ -58,6 +58,23 @@ const waLink = (text = '') => {
 };
 const telLink = () => `tel:+${digits(state.config?.phone)}`;
 const mapLink = () => state.config?.map_url || `https://maps.google.com/?q=${encodeURIComponent(state.config?.address || '')}`;
+const isStaffUser = () => ['staff', 'admin'].includes(state.user?.role);
+const isAdmin = () => state.user?.role === 'admin';
+const homeFor = (u) => (!u ? '#/' : u.role === 'admin' ? '#/admin' : u.role === 'staff' ? '#/admin/schedule' : '#/account');
+const opts = (list) => state.options?.[list] || [];
+async function loadOptions() {
+  state.options = isStaffUser() ? await api('/api/options') : null;
+}
+/** <select> markup. items: [{value,label,group?}] or strings. */
+function selectHTML(id, items, { placeholder, value = '', cls = 'input input-sm', required = false } = {}) {
+  const norm = items.map((i) => (typeof i === 'string' ? { value: i, label: i } : i));
+  const groups = [...new Set(norm.map((i) => i.group || ''))];
+  const optHTML = (list) => list.map((i) => `<option value="${esc(i.value)}" ${String(i.value) === String(value) ? 'selected' : ''}>${esc(i.label)}</option>`).join('');
+  return `<select class="${cls}" id="${id}" name="${id}" ${required ? 'required' : ''}>
+    ${placeholder !== undefined ? `<option value="">${esc(placeholder)}</option>` : ''}
+    ${groups.length > 1 ? groups.map((g) => `<optgroup label="${esc(g)}">${optHTML(norm.filter((i) => (i.group || '') === g))}</optgroup>`).join('') : optHTML(norm)}
+  </select>`;
+}
 const statusLabel = { confirmed: 'Confirmed', completed: 'Completed', cancelled: 'Cancelled', no_show: 'No-show' };
 const badge = (s) => `<span class="badge ${s}">${statusLabel[s] || s}</span>`;
 
@@ -133,6 +150,7 @@ function confirmDialog({ title, text, ok = 'Confirm', danger = false }) {
 async function refreshUser() {
   const { user } = await api('/api/auth/me');
   state.user = user;
+  await loadOptions();
   renderNav();
   return user;
 }
@@ -142,8 +160,9 @@ async function quickLogin(role, next) {
     const { user } = await api('/api/auth/quick', { method: 'POST', body: { role } });
     state.user = user;
     renderNav();
+    await loadOptions();
     toast(`Signed in as ${user.name}`);
-    go(next || (user.role === 'admin' ? '#/admin' : '#/account'));
+    go(next && !isStaffUser() ? next : homeFor(user));
   } catch (e) {
     toastError(e);
   }
@@ -163,14 +182,14 @@ function renderNav() {
   const el = $('#navActions');
   document.body.classList.toggle('is-admin', location.hash.startsWith('#/admin'));
   const navAuth = $('#navAuth');
-  navAuth.textContent = !u ? 'Sign in' : u.role === 'admin' ? 'Dashboard' : 'My bookings';
-  navAuth.setAttribute('href', !u ? '#/login' : u.role === 'admin' ? '#/admin' : '#/account');
+  navAuth.textContent = !u ? 'Sign in' : u.role === 'customer' ? 'My bookings' : 'Dashboard';
+  navAuth.setAttribute('href', !u ? '#/login' : homeFor(u));
   if (!u) {
     el.innerHTML = `<a href="#/login" class="plain">Sign in</a><a href="#/book" class="btn btn-sm">Book now</a>`;
     return;
   }
   el.innerHTML = `
-    ${u.role === 'admin' ? '' : '<a href="#/book" class="btn btn-sm ghost-hide">Book</a>'}
+    ${u.role === 'customer' ? '<a href="#/book" class="btn btn-sm ghost-hide">Book</a>' : ''}
     <div class="menu-wrap">
       <button class="menu-btn" id="userMenuBtn" aria-haspopup="true" aria-label="Account menu">${avatar(u.name, u.id)}</button>
     </div>`;
@@ -183,10 +202,10 @@ function renderNav() {
     m.className = 'menu';
     m.innerHTML = `
       <div class="who"><strong>${esc(u.name)}</strong><div class="small muted">${esc(u.email)}</div></div>
-      ${u.role === 'admin' ? '<a href="#/admin">Salon dashboard</a>' : ''}
-      <a href="#/account">My bookings</a>
+      ${u.role === 'customer' ? `<a href="#/account">My bookings</a>
       <a href="#/account/profile">Profile &amp; security</a>
-      <a href="#/book">New booking</a>
+      <a href="#/book">New booking</a>` : `<a href="${homeFor(u)}">${u.role === 'admin' ? 'Admin dashboard' : 'Staff workspace'}</a>
+      <a href="#/account/profile">Profile &amp; password</a>`}
       <button id="logoutBtn">Sign out</button>`;
     wrap.appendChild(m);
     $('#logoutBtn', m).addEventListener('click', logout);
@@ -194,11 +213,17 @@ function renderNav() {
   });
 }
 
+$$('#navLinks a').forEach((a) => a.addEventListener('click', () => {
+  $('#navLinks').classList.remove('open');
+  $('#burger').setAttribute('aria-expanded', 'false');
+  document.body.classList.remove('menu-open');
+}));
 $('#burger').addEventListener('click', (e) => {
   const links = $('#navLinks');
   const open = !links.classList.contains('open');
   links.classList.toggle('open', open);
   e.currentTarget.setAttribute('aria-expanded', open);
+  document.body.classList.toggle('menu-open', open);
 });
 
 /* ============================================================= router */
@@ -210,14 +235,18 @@ async function render() {
   const hash = location.hash || '#/';
   $('#navLinks').classList.remove('open');
   $('#burger').setAttribute('aria-expanded', 'false');
+  document.body.classList.remove('menu-open');
   $$('#navLinks a').forEach((a) => a.classList.toggle('active', hash.startsWith(a.getAttribute('href'))));
   document.body.classList.toggle('is-admin', hash.startsWith('#/admin'));
-  document.body.classList.toggle('no-fab', /^#\/(login|signup|book)/.test(hash));
+  document.body.classList.toggle('no-fab', /^#\/(login|signup|book|staff)/.test(hash));
   for (const r of routes) {
     const m = hash.match(r.re);
     if (!m) continue;
     if (r.guard === 'auth' && !state.user) return go(`#/login?next=${encodeURIComponent(hash)}`);
-    if (r.guard === 'admin' && state.user?.role !== 'admin') return go(state.user ? '#/account' : `#/login?next=${encodeURIComponent(hash)}`);
+    if ((r.guard === 'admin' || r.guard === 'staff') && !state.user) return go('#/staff');
+    if (r.guard === 'staff' && !isStaffUser()) return go(homeFor(state.user));
+    if (r.guard === 'admin' && !isAdmin()) return go(homeFor(state.user));
+    if (isStaffUser() && !state.options) await loadOptions();
     window.scrollTo(0, 0);
     try {
       await r.fn(...m.slice(1));
@@ -751,17 +780,13 @@ function authShell(inner) {
   app.innerHTML = `<section class="auth-wrap"><div class="auth-card reveal">${inner}</div></section>`;
 }
 
-function quickLoginBlock(next) {
+function quickLoginBlock() {
   if (!state.config.quick_login) return '';
   return `
     <div class="divider">or skip the form</div>
     <button class="quick-btn" data-quick="customer">
       <span class="avatar" style="--a1:#34c759;--a2:#00a3a3">${ICON.bolt.replace(/22/g, '16')}</span>
       <span class="grow"><strong>One-click sign in</strong><span class="small muted">Continue instantly as a guest customer</span></span>${ICON.right}
-    </button>
-    <button class="quick-btn" data-quick="admin">
-      <span class="avatar" style="--a1:#3f7bff;--a2:#6a3cff">${ICON.key.replace(/22/g, '16')}</span>
-      <span class="grow"><strong>Salon staff (admin)</strong><span class="small muted">Open the dashboard without a password</span></span>${ICON.right}
     </button>`;
 }
 function bindQuick(next) {
@@ -787,7 +812,8 @@ on(/^#\/login(?:\?.*)?$/, async () => {
       ${quickLoginBlock(next)}
       <p class="center small" style="margin-top:20px">New here? <a href="#/signup${next ? `?next=${encodeURIComponent(next)}` : ''}">Create an account</a></p>
     </div>
-    <p class="center small muted" style="margin-top:16px">Demo: demo@salon.local / demo123 · admin@salon.local / admin123</p>`);
+    <p class="center small" style="margin-top:18px"><a href="#/staff">Salon staff or admin? Sign in here ›</a></p>
+    <p class="center small muted" style="margin-top:8px">Demo: demo@salon.local / demo123</p>`);
   bindQuick(next);
   $('#forgotLink').addEventListener('click', (e) => {
     e.preventDefault();
@@ -810,7 +836,52 @@ on(/^#\/login(?:\?.*)?$/, async () => {
       state.user = user;
       renderNav();
       toast(`Welcome back, ${user.name.split(' ')[0]}`);
-      go(next || (user.role === 'admin' ? '#/admin' : '#/account'));
+      go(next || homeFor(user));
+    } catch (err) {
+      $('#err').textContent = err.message;
+      btn.disabled = false;
+    }
+  });
+});
+
+on(/^#\/staff$/, async () => {
+  if (isStaffUser()) return go(homeFor(state.user));
+  authShell(`
+    <div class="center" style="margin-bottom:28px"><span class="tag" style="font-size:13px">Salon team</span>
+      <h1 class="title" style="margin-top:10px">Staff sign in.</h1><p class="muted" style="margin-top:8px">For front desk, stylists and admins.</p></div>
+    <div class="card">
+      <form id="staffForm" novalidate>
+        <label class="field"><span>Work email</span><input class="input" name="email" type="email" autocomplete="username" required></label>
+        <label class="field"><span>Password</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
+        <p class="form-error" id="err"></p>
+        <button class="btn block dark" type="submit">Sign in to workspace</button>
+      </form>
+      ${state.config.quick_login ? `
+        <div class="divider">or one-click (demo)</div>
+        <button class="quick-btn" data-quick="staff">
+          <span class="avatar" style="--a1:#ff9f0a;--a2:#ff5f6d">${ICON.scissors.replace(/22/g, '16')}</span>
+          <span class="grow"><strong>Staff (front desk)</strong><span class="small muted">Schedule, bookings and customers</span></span>${ICON.right}
+        </button>
+        <button class="quick-btn" data-quick="admin">
+          <span class="avatar" style="--a1:#3f7bff;--a2:#6a3cff">${ICON.key.replace(/22/g, '16')}</span>
+          <span class="grow"><strong>Admin</strong><span class="small muted">Everything, including staff and dropdown lists</span></span>${ICON.right}
+        </button>` : ''}
+      <p class="center small" style="margin-top:20px"><a href="#/login">Customer sign in ›</a></p>
+    </div>
+    <p class="center small muted" style="margin-top:16px">Demo: staff@salon.local / staff123 · admin@salon.local / admin123</p>`);
+  $$('[data-quick]').forEach((b) => b.addEventListener('click', () => quickLogin(b.dataset.quick)));
+  $('#staffForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const btn = $('button[type=submit]', e.target);
+    btn.disabled = true;
+    try {
+      const { user } = await api('/api/auth/staff-login', { method: 'POST', body: { email: f.get('email'), password: f.get('password') } });
+      state.user = user;
+      await loadOptions();
+      renderNav();
+      toast(`Welcome, ${user.name.split(' ')[0]}`);
+      go(homeFor(user));
     } catch (err) {
       $('#err').textContent = err.message;
       btn.disabled = false;
@@ -995,15 +1066,16 @@ function drawProfile(body) {
 
 /* ============================================================== admin */
 const ADMIN_NAV = [
-  ['', 'Overview'], ['schedule', 'Schedule'], ['bookings', 'Bookings'], ['services', 'Services'],
-  ['team', 'Team'], ['customers', 'Customers'], ['settings', 'Settings'],
+  ['', 'Overview', 'admin'], ['schedule', 'Schedule', 'staff'], ['bookings', 'Bookings', 'staff'], ['customers', 'Customers', 'staff'],
+  ['services', 'Services', 'admin'], ['team', 'Stylists', 'admin'], ['staff', 'Staff accounts', 'admin'],
+  ['lists', 'Dropdown lists', 'admin'], ['settings', 'Settings', 'admin'],
 ];
 
 function adminShell(section, title, actions = '') {
   app.innerHTML = `
     <div class="admin">
-      <nav class="admin-side"><div class="lbl">${esc(state.config.salon_name)}</div>
-        ${ADMIN_NAV.map(([k, l]) => `<a href="#/admin${k ? '/' + k : ''}" class="${k === section ? 'on' : ''}">${l}</a>`).join('')}
+      <nav class="admin-side"><div class="lbl">${isAdmin() ? 'Admin' : 'Staff'} · ${esc(state.config.salon_name)}</div>
+        ${ADMIN_NAV.filter(([, , r]) => isAdmin() || r === 'staff').map(([k, l]) => `<a href="#/admin${k ? '/' + k : ''}" class="${k === section ? 'on' : ''}">${l}</a>`).join('')}
       </nav>
       <div class="admin-main"><div class="head"><h1>${title}</h1>${actions}</div><div id="adminBody"></div></div>
     </div>`;
@@ -1121,49 +1193,73 @@ function barChart(root, week) {
 }
 
 function bookingDetail(b, done) {
+  const statusItems = Object.entries(statusLabel).map(([value, label]) => ({ value, label }));
   modal(`
     <div class="row"><h2 style="flex:1">${esc(b.customer_name)}</h2>${badge(b.status)}</div>
-    <p class="muted">${esc(b.customer_email)}${b.customer_phone ? ' · ' + esc(b.customer_phone) : ''}</p>
+    <p class="muted">${b.customer_phone ? `<a href="tel:${esc(b.customer_phone.replace(/\s/g, ''))}">${esc(b.customer_phone)}</a>` : ''}${b.customer_email && !b.customer_email.endsWith('@guest.local') ? ` · ${esc(b.customer_email)}` : ''}</p>
     <div class="summary" style="position:static"><dl>
       <dt>Service</dt><dd>${esc(b.service_name)}</dd>
       <dt>Stylist</dt><dd>${esc(b.stylist_name)}</dd>
       <dt>When</dt><dd>${fmtDate(b.date, { weekday: 'short', month: 'short', day: 'numeric' })}, ${fmtTime(b.time)} – ${fmtTime(b.end_time)}</dd>
       <dt>Price</dt><dd>${money(b.price)}</dd>
+      <dt>Source</dt><dd>${esc(b.source || 'Online')}</dd>
+      ${b.payment_method ? `<dt>Payment</dt><dd>${esc(b.payment_method)}</dd>` : ''}
+      ${b.status_reason ? `<dt>Reason</dt><dd>${esc(b.status_reason)}</dd>` : ''}
       ${b.notes ? `<dt>Notes</dt><dd>${esc(b.notes)}</dd>` : ''}
       <dt>Booking</dt><dd>#${b.id}</dd>
     </dl></div>
-    <div class="foot" style="justify-content:flex-start">
-      ${b.status !== 'completed' ? '<button class="btn btn-sm" data-s="completed">Mark completed</button>' : ''}
-      ${b.status === 'confirmed' ? '<button class="btn gray btn-sm" data-s="no_show">No-show</button><button class="btn gray btn-sm" id="adResched">Reschedule</button><button class="btn danger btn-sm" data-s="cancelled">Cancel</button>' : ''}
-      ${b.status !== 'confirmed' ? '<button class="btn gray btn-sm" data-s="confirmed">Re-open</button>' : ''}
-      <span class="spacer"></span><button class="btn gray btn-sm" data-close>Close</button>
+    <div class="card flat" style="padding:16px">
+      <h3 style="font-size:16px;margin-bottom:12px">Update booking</h3>
+      <div class="grid grid-2" style="gap:0 12px">
+        <label class="field"><span>Status</span>${selectHTML('bdStatus', statusItems, { value: b.status })}</label>
+        <label class="field" id="bdPayWrap"><span>Payment method</span>${selectHTML('bdPay', opts('payment'), { placeholder: 'Choose…', value: b.payment_method })}</label>
+        <label class="field" id="bdReasonWrap"><span>Reason</span>${selectHTML('bdReason', opts('reason'), { placeholder: 'Choose…', value: b.status_reason })}</label>
+      </div>
+    </div>
+    <div class="foot">
+      ${b.status === 'confirmed' ? '<button class="btn gray btn-md" id="adResched" style="margin-right:auto">Reschedule</button>' : ''}
+      <button class="btn gray btn-md" data-close>Close</button><button class="btn btn-md" id="bdSave">Save</button>
     </div>`,
   {
     onMount(m, close) {
-      $$('[data-s]', m).forEach((btn) => btn.addEventListener('click', async () => {
+      const sync = () => {
+        const st = $('#bdStatus', m).value;
+        $('#bdPayWrap', m).classList.toggle('hidden', st !== 'completed');
+        $('#bdReasonWrap', m).classList.toggle('hidden', !['cancelled', 'no_show'].includes(st));
+      };
+      sync();
+      $('#bdStatus', m).addEventListener('change', sync);
+      $('#bdSave', m).addEventListener('click', async () => {
         try {
-          await api(`/api/admin/bookings/${b.id}`, { method: 'PATCH', body: { status: btn.dataset.s } });
-          toast(`Marked ${statusLabel[btn.dataset.s].toLowerCase()}`);
+          await api(`/api/admin/bookings/${b.id}`, { method: 'PATCH', body: { status: $('#bdStatus', m).value, payment_method: $('#bdPay', m).value, status_reason: $('#bdReason', m).value } });
+          toast('Booking updated');
           close(); done();
         } catch (e) { toastError(e); }
-      }));
+      });
       $('#adResched', m)?.addEventListener('click', () => { close(); rescheduleModal(b, done, { admin: true }); });
     },
   });
 }
 
-function staffBookingModal(done) {
+async function staffBookingModal(done) {
+  const customers = await api('/api/admin/customers');
+  const svcItems = state.services.map((s) => ({ value: s.id, label: `${s.name} · ${fmtDuration(s.duration_min)} · ${money(s.price)}`, group: s.category }));
+  const custItems = [{ value: 'new', label: '+ New customer' }, ...customers.map((c) => ({ value: c.id, label: `${c.name}${c.phone ? ` · ${c.phone}` : ''}` }))];
+  const mine = state.user?.stylist_id;
   modal(`
-    <h2>New booking</h2><p class="muted">For walk-ins and phone bookings. New customers are created automatically.</p>
-    <div class="grid grid-3" style="margin-top:18px;gap:10px">
-      <label class="field"><span>Customer email</span><input class="input input-sm" id="nbEmail" type="email" list="custList" required></label>
-      <label class="field"><span>Name (new customers)</span><input class="input input-sm" id="nbName"></label>
-      <label class="field"><span>Mobile</span><input class="input input-sm" id="nbPhone" type="tel" inputmode="numeric" placeholder="10 digits"></label>
+    <h2>New booking</h2><p class="muted">For walk-ins, phone and WhatsApp bookings.</p>
+    <div class="grid grid-2" style="margin-top:18px;gap:0 12px">
+      <label class="field"><span>Customer</span>${selectHTML('nbCust', custItems, { value: 'new' })}</label>
+      <label class="field"><span>Booked via</span>${selectHTML('nbSource', opts('source'), { value: opts('source')[0] })}</label>
     </div>
-    <datalist id="custList"></datalist>
-    <div class="grid grid-2" style="gap:10px">
-      <label class="field"><span>Service</span><select class="input input-sm" id="nbSvc">${state.services.map((s) => `<option value="${s.id}">${esc(s.name)} · ${fmtDuration(s.duration_min)}</option>`).join('')}</select></label>
-      <label class="field"><span>Stylist</span><select class="input input-sm" id="nbSty"><option value="">Any available</option>${state.stylists.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label>
+    <div class="grid grid-3" id="nbNewCust" style="gap:0 12px">
+      <label class="field"><span>Name</span><input class="input input-sm" id="nbName" autocomplete="off"></label>
+      <label class="field"><span>Mobile</span><input class="input input-sm" id="nbPhone" type="tel" inputmode="numeric" placeholder="10 digits"></label>
+      <label class="field"><span>Email (optional)</span><input class="input input-sm" id="nbEmail" type="email"></label>
+    </div>
+    <div class="grid grid-2" style="gap:0 12px">
+      <label class="field"><span>Service</span>${selectHTML('nbSvc', svcItems)}</label>
+      <label class="field"><span>Stylist</span>${selectHTML('nbSty', state.stylists.map((s) => ({ value: s.id, label: s.name })), { placeholder: 'Any available', value: mine || '' })}</label>
     </div>
     <div id="nbPicker"></div>
     <label class="field" style="margin-top:16px"><span>Notes</span><input class="input input-sm" id="nbNotes"></label>
@@ -1171,9 +1267,9 @@ function staffBookingModal(done) {
   {
     wide: true,
     onMount(m, close) {
-      api('/api/admin/customers').then((cs) => {
-        $('#custList', m).innerHTML = cs.map((c) => `<option value="${esc(c.email)}">${esc(c.name)}</option>`).join('');
-      });
+      const syncCust = () => $('#nbNewCust', m).classList.toggle('hidden', $('#nbCust', m).value !== 'new');
+      syncCust();
+      $('#nbCust', m).addEventListener('change', syncCust);
       let picker;
       const mount = () => {
         $('#nbSave', m).disabled = true;
@@ -1188,9 +1284,12 @@ function staffBookingModal(done) {
       $('#nbSty', m).addEventListener('change', mount);
       $('#nbSave', m).addEventListener('click', async () => {
         const { date, time } = picker.get();
+        const cust = $('#nbCust', m).value;
         try {
           await api('/api/admin/bookings', { method: 'POST', body: {
-            customer_email: $('#nbEmail', m).value, customer_name: $('#nbName', m).value, customer_phone: $('#nbPhone', m).value,
+            customer_id: cust === 'new' ? null : Number(cust),
+            customer_name: $('#nbName', m).value, customer_phone: $('#nbPhone', m).value, customer_email: $('#nbEmail', m).value,
+            source: $('#nbSource', m).value,
             service_id: Number($('#nbSvc', m).value), stylist_id: $('#nbSty', m).value || null, date, time, notes: $('#nbNotes', m).value,
           } });
           toast('Booking created'); close(); done();
@@ -1216,12 +1315,9 @@ on(/^#\/admin\/schedule(?:\?.*)?$/, async () => {
   $('#pickD').addEventListener('change', (e) => e.target.value && goDate(e.target.value));
   $('#newBk').addEventListener('click', () => staffBookingModal(() => render()));
 
-  const [bookings, stylists, settings] = await Promise.all([
-    api(`/api/admin/bookings?from=${date}&to=${date}`),
-    api('/api/admin/stylists'),
-    api('/api/admin/settings'),
-  ]);
-  const active = stylists.filter((s) => s.active);
+  const bookings = await api(`/api/admin/bookings?from=${date}&to=${date}`);
+  const settings = state.config;
+  const active = state.stylists;
   const h = settings.closed_dates.includes(date) ? null : settings.hours[parseDate(date).getDay()];
   const live = bookings.filter((b) => b.status !== 'cancelled');
   const toMin = (t) => { const [a, b] = t.split(':').map(Number); return a * 60 + b; };
@@ -1288,7 +1384,7 @@ on(/^#\/admin\/bookings$/, async () => {
         <td class="num">${badge(b.status)}</td>
         <td class="span">${esc(b.customer_name)}<div class="sub">${esc(b.customer_phone || b.customer_email)}</div></td>
         <td class="span" data-label="Service">${esc(b.service_name)} · ${esc(b.stylist_name)}</td>
-        <td class="span" data-label="Price">${money(b.price)}</td></tr>`).join('')
+        <td class="span" data-label="Price">${money(b.price)}<div class="sub">${esc(b.source || 'Online')}${b.payment_method ? ' · ' + esc(b.payment_method) : ''}</div></td></tr>`).join('')
       : `<tr><td colspan="6" class="empty">No bookings match these filters.</td></tr>`;
     $$('[data-bid]', body).forEach((tr) => tr.addEventListener('click', () => bookingDetail(rows.find((b) => b.id === Number(tr.dataset.bid)), load)));
   }
@@ -1314,7 +1410,11 @@ function crudPage({ section, title, endpoint, columns, fields, blank, after }) {
       item = item || blank;
       modal(`<h2>${isNew ? 'Add' : 'Edit'} ${title.toLowerCase().replace(/s$/, '')}</h2>
         <form id="crudForm" style="margin-top:16px">
-          ${fields.map((f) => f.type === 'switch'
+          ${fields.map((f) => f.type === 'select'
+            ? `<label class="field"><span>${f.label}</span>${selectHTML(f.name, f.options(), { cls: 'input', value: item[f.name] ?? '', placeholder: f.placeholder })}</label>`
+            : f.type === 'checks'
+            ? `<div class="field"><span>${f.label}</span><div class="checks">${f.options().map((o) => `<label class="check"><input type="checkbox" name="${f.name}" value="${esc(o)}" ${(item[f.name] || '').split(',').map((x) => x.trim()).includes(o) ? 'checked' : ''}> ${esc(o)}</label>`).join('')}</div>${f.hint ? `<span class="small muted" style="margin:6px 4px 0;display:block">${f.hint}</span>` : ''}</div>`
+            : f.type === 'switch'
             ? `<label class="row field" style="justify-content:space-between"><span style="margin:0">${f.label}</span><span class="switch"><input type="checkbox" name="${f.name}" ${item[f.name] ? 'checked' : ''}><i></i></span></label>`
             : f.type === 'textarea'
               ? `<label class="field"><span>${f.label}</span><textarea class="input" name="${f.name}">${esc(item[f.name])}</textarea></label>`
@@ -1327,6 +1427,7 @@ function crudPage({ section, title, endpoint, columns, fields, blank, after }) {
             e.preventDefault();
             const data = Object.fromEntries(new FormData(e.target));
             fields.filter((f) => f.type === 'switch').forEach((f) => (data[f.name] = e.target[f.name].checked));
+            fields.filter((f) => f.type === 'checks').forEach((f) => (data[f.name] = $$(`input[name="${f.name}"]:checked`, e.target).map((i) => i.value).join(',')));
             try {
               await api(isNew ? endpoint : `${endpoint}/${item.id}`, { method: isNew ? 'POST' : 'PUT', body: data });
               toast('Saved'); close(); await after(); load();
@@ -1363,7 +1464,7 @@ on(/^#\/admin\/services$/, crudPage({
   ],
   fields: [
     { name: 'name', label: 'Name' },
-    { name: 'category', label: 'Category', list: categories },
+    { name: 'category', label: 'Category', type: 'select', options: () => opts('category') },
     { name: 'description', label: 'Description', type: 'textarea' },
     { name: 'duration_min', label: 'Duration (minutes)', type: 'number' },
     { name: 'price', label: 'Price', type: 'number', step: '0.01' },
@@ -1372,7 +1473,7 @@ on(/^#\/admin\/services$/, crudPage({
 }), 'admin');
 
 on(/^#\/admin\/team$/, crudPage({
-  section: 'team', title: 'Team', endpoint: '/api/admin/stylists', after: reloadCatalog,
+  section: 'team', title: 'Stylists', endpoint: '/api/admin/stylists', after: reloadCatalog,
   blank: { name: '', title: '', bio: '', specialties: '', active: 1 },
   columns: [
     { label: 'Stylist', render: (s) => `<div class="row" style="flex-wrap:nowrap">${avatar(s.name, s.id)}<div><strong>${esc(s.name)}</strong><div class="sub">${esc(s.title)}</div></div></div>` },
@@ -1383,7 +1484,7 @@ on(/^#\/admin\/team$/, crudPage({
     { name: 'name', label: 'Name' },
     { name: 'title', label: 'Title' },
     { name: 'bio', label: 'Short bio', type: 'textarea' },
-    { name: 'specialties', label: 'Specialties', hint: 'Comma-separated categories, e.g. Hair, Threading & Wax, Colour, Bridal. Leave empty for all services.' },
+    { name: 'specialties', label: 'Can do these categories', type: 'checks', options: () => opts('category'), hint: 'Tick none to allow all services.' },
     { name: 'active', label: 'Taking bookings', type: 'switch' },
   ],
 }), 'admin');
@@ -1401,7 +1502,7 @@ on(/^#\/admin\/customers$/, async () => {
       <td data-label="Mobile">${c.phone ? `<a href="tel:${esc(c.phone.replace(/\s/g, ''))}">${esc(c.phone)}</a>` : '—'}</td>
       <td class="num" data-label="Bookings">${c.bookings}</td><td class="num" data-label="Spent">${money(c.spent)}</td>
       <td data-label="Last visit">${c.last_visit ? fmtDate(c.last_visit, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
-      <td class="num"><button class="btn gray btn-sm" data-reset="${c.id}" data-name="${esc(c.name)}">Reset password</button></td></tr>`).join('')
+      <td class="num">${isAdmin() ? `<button class="btn gray btn-sm" data-reset="${c.id}" data-name="${esc(c.name)}">Reset password</button>` : ''}</td></tr>`).join('')
       || '<tr><td colspan="6" class="empty">No customers found.</td></tr>';
     $$('[data-reset]', body).forEach((b) => b.addEventListener('click', () => modal(`
       <h2>Reset password</h2><p class="muted">Set a new password for ${b.dataset.name}. They’ll be signed out everywhere.</p>
@@ -1493,12 +1594,135 @@ on(/^#\/admin\/settings$/, async () => {
   });
 }, 'admin');
 
+/* ---- staff accounts (admin) */
+on(/^#\/admin\/staff$/, async () => {
+  const body = adminShell('staff', 'Staff accounts', `<button class="btn btn-md" id="addStaff">Add staff</button>`);
+  const roleItems = [{ value: 'staff', label: 'Staff — schedule, bookings, customers' }, { value: 'admin', label: 'Admin — full access' }];
+  const styItems = state.stylists.map((s) => ({ value: s.id, label: s.name }));
+  const load = async () => {
+    const list = await api('/api/admin/staff');
+    body.innerHTML = `<p class="muted" style="margin-bottom:16px">Staff sign in at <a href="#/staff">${esc(location.host)}/#/staff</a>. Staff can manage the schedule, bookings and customers; only admins can change services, stylists, staff, dropdown lists and settings.</p>
+      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Role</th><th>Linked stylist</th><th>Status</th><th></th></tr></thead><tbody>
+      ${list.map((u) => `<tr style="${u.active ? '' : 'opacity:.5'}">
+        <td class="span"><div class="row" style="flex-wrap:nowrap">${avatar(u.name, u.id)}<div><strong>${esc(u.name)}</strong>${u.id === state.user.id ? ' <span class="tag">You</span>' : ''}<div class="sub">${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}</div></div></div></td>
+        <td data-label="Role"><span class="tag">${u.role === 'admin' ? 'Admin' : 'Staff'}</span></td>
+        <td data-label="Stylist">${esc(u.stylist_name || '—')}</td>
+        <td data-label="Status">${u.active ? 'Active' : 'Disabled'}</td>
+        <td class="num span"><button class="btn gray btn-sm" data-edit="${u.id}">Edit</button></td></tr>`).join('')}
+      </tbody></table></div>`;
+    $$('[data-edit]', body).forEach((b) => b.addEventListener('click', () => edit(list.find((u) => u.id === Number(b.dataset.edit)))));
+  };
+  const edit = (u) => {
+    const isNew = !u;
+    u = u || { name: '', email: '', phone: '', role: 'staff', stylist_id: '', active: 1 };
+    modal(`<h2>${isNew ? 'Add staff member' : 'Edit ' + esc(u.name)}</h2>
+      <form id="stForm" style="margin-top:16px">
+        <label class="field"><span>Full name</span><input class="input" name="name" value="${esc(u.name)}" required></label>
+        <label class="field"><span>Work email (used to sign in)</span><input class="input" name="email" type="email" value="${esc(u.email)}" ${isNew ? 'required' : 'disabled'}></label>
+        <label class="field"><span>Mobile (optional)</span><input class="input" name="phone" type="tel" inputmode="numeric" value="${esc(u.phone || '')}"></label>
+        <label class="field"><span>Role</span>${selectHTML('role', roleItems, { cls: 'input', value: u.role })}</label>
+        <label class="field"><span>Linked stylist (optional)</span>${selectHTML('stylist_id', styItems, { cls: 'input', placeholder: 'Not a stylist', value: u.stylist_id || '' })}</label>
+        <label class="field"><span>${isNew ? 'Password' : 'New password (leave empty to keep)'}</span><input class="input" name="password" type="text" autocomplete="off" ${isNew ? 'required minlength="6"' : ''}></label>
+        ${isNew ? '' : `<label class="row field" style="justify-content:space-between"><span style="margin:0">Account active</span><span class="switch"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}><i></i></span></label>`}
+        <div class="foot">${isNew ? '' : '<button type="button" class="btn danger btn-md" id="stDel" style="margin-right:auto">Remove</button>'}
+          <button type="button" class="btn gray btn-md" data-close>Cancel</button><button class="btn btn-md">Save</button></div>
+      </form>`, {
+      onMount(m, close) {
+        $('#stForm', m).addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const data = Object.fromEntries(new FormData(e.target));
+          if (!isNew) data.active = e.target.active.checked;
+          try {
+            await api(isNew ? '/api/admin/staff' : `/api/admin/staff/${u.id}`, { method: isNew ? 'POST' : 'PUT', body: data });
+            toast(isNew ? 'Staff member added' : 'Saved'); close(); load();
+          } catch (err) { toastError(err); }
+        });
+        $('#stDel', m)?.addEventListener('click', async () => {
+          if (!(await confirmDialog({ title: `Remove ${u.name}?`, text: 'They will no longer be able to sign in.', ok: 'Remove', danger: true }))) return;
+          try { await api(`/api/admin/staff/${u.id}`, { method: 'DELETE' }); toast('Removed'); load(); } catch (err) { toastError(err); }
+        });
+      },
+    });
+  };
+  $('#addStaff').addEventListener('click', () => edit(null));
+  load();
+});
+
+/* ---- dropdown lists (admin) */
+on(/^#\/admin\/lists$/, async () => {
+  const body = adminShell('lists', 'Dropdown lists');
+  const hints = {
+    category: 'Used to group services on the website and in the service editor. Order here = order on the site.',
+    source: 'Shown to staff when creating a booking (“Booked via”).',
+    payment: 'Staff choose one when marking a booking completed.',
+    reason: 'Staff choose one when cancelling or marking a no-show.',
+  };
+  const load = async () => {
+    const { lists, options } = await api('/api/admin/options');
+    body.innerHTML = `<p class="muted" style="margin-bottom:16px">Everything staff pick from a dropdown comes from these lists. Add, rename, reorder, hide or remove options at any time.</p>
+      <div class="grid grid-2" style="gap:16px;align-items:start">
+      ${Object.entries(lists).map(([key, title]) => `
+        <div class="card">
+          <h3 style="font-size:19px">${esc(title)}</h3>
+          <p class="small muted" style="margin:4px 0 14px">${hints[key] || ''}</p>
+          <div class="opt-list">
+            ${(options[key] || []).map((o, i, arr) => `
+              <div class="opt ${o.active ? '' : 'off'}" data-id="${o.id}">
+                <span class="opt-label">${esc(o.label)}</span>${o.active ? '' : '<span class="tag">Hidden</span>'}
+                <button class="icon-btn" data-act="up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button>
+                <button class="icon-btn" data-act="down" ${i === arr.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>
+                <button class="icon-btn" data-act="edit" aria-label="Edit">Edit</button>
+              </div>`).join('') || '<p class="small muted">No options yet.</p>'}
+          </div>
+          <form class="row opt-add" data-list="${key}" style="margin-top:12px;flex-wrap:nowrap">
+            <input class="input input-sm" name="label" placeholder="Add new option" required maxlength="60">
+            <button class="btn btn-sm">Add</button>
+          </form>
+        </div>`).join('')}
+      </div>`;
+    const all = Object.values(options).flat();
+    $$('.opt-add', body).forEach((f) => f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try { await api('/api/admin/options', { method: 'POST', body: { list: f.dataset.list, label: f.label.value } }); toast('Added'); await refresh(); } catch (err) { toastError(err); }
+    }));
+    $$('.opt [data-act]', body).forEach((btn) => btn.addEventListener('click', async () => {
+      const o = all.find((x) => x.id === Number(btn.closest('.opt').dataset.id));
+      if (btn.dataset.act !== 'edit') {
+        try { await api(`/api/admin/options/${o.id}/move`, { method: 'POST', body: { dir: btn.dataset.act } }); await refresh(); } catch (err) { toastError(err); }
+        return;
+      }
+      modal(`<h2>Edit option</h2><p class="muted">${esc(lists[o.list])}${o.list === 'category' ? ' — renaming also updates services and stylists using it.' : ''}</p>
+        <form id="opForm" style="margin-top:16px">
+          <label class="field"><span>Name</span><input class="input" name="label" value="${esc(o.label)}" required maxlength="60"></label>
+          <label class="row field" style="justify-content:space-between"><span style="margin:0">Show in dropdowns</span><span class="switch"><input type="checkbox" name="active" ${o.active ? 'checked' : ''}><i></i></span></label>
+          <div class="foot"><button type="button" class="btn danger btn-md" id="opDel" style="margin-right:auto">Remove</button>
+            <button type="button" class="btn gray btn-md" data-close>Cancel</button><button class="btn btn-md">Save</button></div>
+        </form>`, {
+        onMount(m, close) {
+          $('#opForm', m).addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try { await api(`/api/admin/options/${o.id}`, { method: 'PUT', body: { label: e.target.label.value, active: e.target.active.checked } }); toast('Saved'); close(); await refresh(); } catch (err) { toastError(err); }
+          });
+          $('#opDel', m).addEventListener('click', async () => {
+            try { await api(`/api/admin/options/${o.id}`, { method: 'DELETE' }); toast('Removed'); close(); await refresh(); } catch (err) { toastError(err); }
+          });
+        },
+      });
+    }));
+  };
+  const refresh = async () => {
+    await Promise.all([loadOptions(), reloadCatalog(), api('/api/config').then((c) => (state.config = c))]);
+    await load();
+  };
+  load();
+});
+
 /* ======================================== guards for remaining routes */
 // Apply guards to routes registered above without one.
 for (const r of routes) {
   const src = r.re.source;
   if (src.includes('account')) r.guard = 'auth';
-  if (src.includes('admin')) r.guard = 'admin';
+  if (src.includes('admin')) r.guard = /admin\\\/(schedule|bookings|customers)/.test(src) ? 'staff' : 'admin';
 }
 
 /* =============================================================== boot */
