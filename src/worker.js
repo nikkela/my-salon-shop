@@ -1,7 +1,8 @@
-// Lumière Salon — Cloudflare Worker: REST API on D1 + embedded static site.
+// Salon — Cloudflare Worker: REST API on D1 + embedded static site.
 import { hashPassword, verifyPassword, newToken } from './auth.js';
 import * as S from './slots.js';
 import STATIC from './static.gen.js';
+import { DEFAULT_SETTINGS, SERVICES, STYLISTS } from './seed-data.js';
 
 const SESSION_DAYS = 30;
 
@@ -23,29 +24,6 @@ const str = (v, max = 200) => String(v ?? '').trim().slice(0, max);
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /* ---------------------------------------------------------------- settings */
-const DEFAULT_SETTINGS = {
-  salon_name: 'Lumière Salon',
-  tagline: 'Hair. Skin. Calm.',
-  address: '24 Park Avenue, Downtown',
-  phone: '+1 (555) 010-2040',
-  email: 'hello@lumiere.example',
-  currency: 'USD',
-  timezone: 'UTC',
-  slot_interval: 15,
-  cancel_cutoff_hours: 2,
-  max_days_ahead: 60,
-  hours: {
-    0: null,
-    1: { open: '10:00', close: '19:00' },
-    2: { open: '10:00', close: '19:00' },
-    3: { open: '10:00', close: '19:00' },
-    4: { open: '10:00', close: '20:00' },
-    5: { open: '10:00', close: '20:00' },
-    6: { open: '09:00', close: '18:00' },
-  },
-  closed_dates: [],
-};
-
 async function getSettings(db) {
   const { results } = await db.prepare('SELECT key, value FROM settings').all();
   const out = { ...DEFAULT_SETTINGS };
@@ -82,26 +60,10 @@ async function ensureSeed(db) {
 async function seedBatch(db, u, sv, st) {
   await db.batch([
     db.prepare(`INSERT INTO settings(key, value) VALUES ('seeded', 'true')`),
-    u.bind('Salon Admin', 'admin@salon.local', '+1 555 000 0001', await hashPassword('admin123'), 'admin'),
-    u.bind('Demo Customer', 'demo@salon.local', '+1 555 000 0002', await hashPassword('demo123'), 'customer'),
-    ...[
-      ['Signature Haircut', 'Hair', 'Consultation, wash, precision cut and blow-dry finish.', 45, 55],
-      ['Men’s Cut & Style', 'Hair', 'Clean, tailored cut with hot towel finish.', 30, 35],
-      ['Blow-dry & Style', 'Hair', 'Smooth, voluminous or waves — your call.', 30, 40],
-      ['Full Colour', 'Colour', 'Root-to-tip single process colour with gloss.', 90, 120],
-      ['Balayage', 'Colour', 'Hand-painted, sun-kissed dimension.', 150, 210],
-      ['Keratin Smoothing', 'Treatment', 'Frizz-free shine that lasts up to 12 weeks.', 120, 180],
-      ['Hydrating Facial', 'Skin', 'Deep cleanse, exfoliation and moisture mask.', 60, 85],
-      ['Classic Manicure', 'Nails', 'Shape, cuticle care, polish.', 30, 30],
-      ['Gel Pedicure', 'Nails', 'Soak, scrub, massage and long-wear gel.', 45, 50],
-      ['Bridal Package', 'Special', 'Trial, hair and make-up on the big day.', 180, 350],
-    ].map((s) => sv.bind(...s)),
-    ...[
-      ['Ava Laurent', 'Creative Director', '12 years shaping effortless, lived-in hair.', 'Hair,Colour,Special'],
-      ['Noah Kim', 'Senior Stylist', 'Precision cuts and modern men’s grooming.', 'Hair,Treatment'],
-      ['Maya Patel', 'Colour Specialist', 'Balayage and dimensional colour expert.', 'Colour,Hair,Treatment'],
-      ['Leo Rossi', 'Skin & Nails Artist', 'Calm hands, detailed finishes.', 'Skin,Nails,Special'],
-    ].map((s) => st.bind(...s)),
+    u.bind('Salon Admin', 'admin@salon.local', '+91 90000 00001', await hashPassword('admin123'), 'admin'),
+    u.bind('Demo Customer', 'demo@salon.local', '+91 90000 00002', await hashPassword('demo123'), 'customer'),
+    ...SERVICES.map((s) => sv.bind(...s)),
+    ...STYLISTS.map((s) => st.bind(...s)),
   ]);
 }
 

@@ -1,4 +1,4 @@
-/* Lumière Salon — single-page app (no framework, no build step). */
+/* Salon — single-page app (no framework, no build step). */
 'use strict';
 
 /* =============================================================== state */
@@ -28,7 +28,7 @@ async function api(path, { method = 'GET', body } = {}) {
 }
 
 const money = (n) =>
-  new Intl.NumberFormat(undefined, {
+  new Intl.NumberFormat(state.config?.currency === 'INR' ? 'en-IN' : undefined, {
     style: 'currency',
     currency: state.config?.currency || 'USD',
     maximumFractionDigits: n % 1 ? 2 : 0,
@@ -226,6 +226,8 @@ const CATEGORY_ART = {
   Skin: 'linear-gradient(135deg,#ffe0ef,#ff5f9e 50%,#9b5cff)',
   Nails: 'linear-gradient(135deg,#e6f0ff,#3f7bff 50%,#6a3cff)',
   Special: 'linear-gradient(135deg,#fff7d6,#ffcc00 40%,#ff7a59)',
+  Bridal: 'linear-gradient(135deg,#ffe3d1,#ff5f6d 45%,#c2185b)',
+  'Threading & Wax': 'linear-gradient(135deg,#fff0e0,#ff9f0a 50%,#ff5f9e)',
 };
 
 on(/^#\/?$/, async () => {
@@ -276,7 +278,7 @@ on(/^#\/?$/, async () => {
           ${[
             ['clock', 'Book in seconds', 'Real-time availability. Pick a time that suits you — no calls, no waiting.'],
             ['scissors', 'Expert stylists', 'A small team of specialists who listen first and cut second.'],
-            ['spark', 'Premium products', 'Salon-grade, cruelty-free care for every hair and skin type.'],
+            ['spark', 'Premium products', 'Trusted professional brands and herbal care for Indian hair and skin.'],
             ['shield', 'Flexible changes', `Reschedule or cancel online up to ${c.cancel_cutoff_hours} hours before.`],
           ].map(([i, h, p]) => `<div class="feature"><div class="ico">${ICON[i]}</div><h3>${h}</h3><p class="muted">${p}</p></div>`).join('')}
         </div>
@@ -1316,7 +1318,7 @@ function crudPage({ section, title, endpoint, columns, fields, blank, after }) {
 const reloadCatalog = async () => {
   [state.services, state.stylists] = await Promise.all([api('/api/services'), api('/api/stylists')]);
 };
-const categories = () => [...new Set(['Hair', 'Colour', 'Treatment', 'Skin', 'Nails', 'Special', ...state.services.map((s) => s.category)])];
+const categories = () => [...new Set(['Hair', 'Colour', 'Treatment', 'Skin', 'Threading & Wax', 'Nails', 'Bridal', ...state.services.map((s) => s.category)])];
 
 on(/^#\/admin\/services$/, crudPage({
   section: 'services', title: 'Services', endpoint: '/api/admin/services', after: reloadCatalog,
