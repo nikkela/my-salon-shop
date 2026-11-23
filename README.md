@@ -2,7 +2,7 @@
 
 A complete salon website: customer accounts, **one-click sign in**, real-time slot booking, and an admin console. The design is inspired by Apple's style: system fonts, lots of white space, frosted navigation, rounded cards and automatic dark mode.
 
-**Live:** https://my-salon-shop.kelanikunj72.workers.dev
+**Live:** https://my-salon-shop.saundarya-salon.workers.dev
 
 Runs on **Cloudflare Workers** with a **D1** database (Cloudflare's hosted SQLite). There's no front-end framework or build step; the static files are embedded into the Worker.
 
