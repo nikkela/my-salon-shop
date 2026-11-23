@@ -666,13 +666,15 @@ select.input-sm, select.input { appearance: auto; }
 @media (max-width: 700px) { .admin-main .head #newBk { order: 1; } }
 
 /* Phones: the page must never pan sideways (iPhone Safari lets you drag sideways when
-   anything pokes past the edge, even by a pixel). Clip at the page edge and only allow
-   vertical scrolling and pinch-zoom. */
+   anything pokes past the edge, even by a pixel). Clip at the page edge.  */
 html { overflow-x: hidden; }
 body { overflow-x: clip; max-width: 100%; }
 @media (max-width: 760px) {
-  html, body { touch-action: pan-y pinch-zoom; overscroll-behavior-x: none; }
+  /* iPhone zooms the page in when you tap a field whose text is under 16px; keep every field at 16px. */
+  input, select, textarea, .input, .input-sm { font-size: 16px !important; }
   .tile .title { font-size: 20px; overflow-wrap: anywhere; hyphens: auto; }
   h1, h2, h3, p, a, span, li, td, strong { overflow-wrap: break-word; }
   img, svg, video, canvas, table, pre { max-width: 100%; }
+  /* grid cells may shrink below their text width, so a long word can never widen the page */
+  .tiles > *, .grid > *, .cal-grid > *, .footer-top > *, .book-layout > *, .booking > *, .table-wrap tr > *, .summary dl > *, .hours-list > * { min-width: 0; }
 }
